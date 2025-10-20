@@ -229,6 +229,8 @@ def send_post(m):
 keep_alive()
 print("✅ בוט פעיל ומוכן!")
 bot.infinity_polling()
+# Redeploy check
+
 
 
 
