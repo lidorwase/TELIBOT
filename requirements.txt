@@ -1,5 +1,6 @@
-telebot
-flask
-requests
+pyTelegramBotAPI
 beautifulsoup4
-html5lib
+requests
+flask
+openai
+
