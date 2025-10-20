@@ -1,20 +1,28 @@
-import os, re, json, html, time, hmac, hashlib, urllib.parse, requests
+import os
+import re
+import json
+import html
+import time
+import hmac
+import hashlib
+import urllib.parse
+import requests
 from bs4 import BeautifulSoup
-import telebot
+import openai
 from flask import Flask
 from threading import Thread
 
-# ========= SETTINGS =========
-BOT_TOKEN = "8335966151:AAFoWoIF_Dh9bfXPkyezhT3EhHima2VwIr0"          # טוקן של הבוט שלך
-CHANNEL_USERNAME = "@dealsumustcheck"                                  # שם הערוץ שלך
+# ===== SETTINGS =====
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 
 # AliExpress Open Platform
-ALI_APP_KEY = "520472"                                                # מהצילום שלך
-ALI_APP_SECRET = "z9YA6zx5tsXojNNdysNWDgcfmtAlSWwo"                   # ה־App Secret שלך
+ALI_APP_KEY = os.getenv("ALI_APP_KEY")
+ALI_APP_SECRET = os.getenv("ALI_APP_SECRET")
 
-# OpenAI (לא חובה, רק אם תרצה שהבוט יכתוב תיאור שיווקי חכם)
-import os
+# OpenAI Key
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
 
 ALI_GATEWAY = "https://api-sg.aliexpress.com/sync"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -221,5 +229,6 @@ def send_post(m):
 keep_alive()
 print("✅ בוט פעיל ומוכן!")
 bot.infinity_polling()
+
 
 
