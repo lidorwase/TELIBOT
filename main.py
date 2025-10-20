@@ -22,6 +22,24 @@ ALI_APP_SECRET = os.getenv("ALI_APP_SECRET")
 
 # OpenAI Key
 openai.api_key = os.getenv("OPENAI_API_KEY")
+# ===== DEBUG TEST - check environment variables =====
+print("🔍 DEBUG: Checking environment variables loaded from Railway...")
+
+vars_to_check = {
+    "BOT_TOKEN": os.getenv("BOT_TOKEN"),
+    "CHANNEL_USERNAME": os.getenv("CHANNEL_USERNAME"),
+    "ALI_APP_KEY": os.getenv("ALI_APP_KEY"),
+    "ALI_APP_SECRET": os.getenv("ALI_APP_SECRET"),
+    "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY")
+}
+
+for name, value in vars_to_check.items():
+    if value:
+        print(f"✅ {name} detected successfully ({len(value)} chars)")
+    else:
+        print(f"❌ {name} NOT FOUND – check Railway Variables tab!")
+
+print("-----------------------------------------------------\n")
 
 
 ALI_GATEWAY = "https://api-sg.aliexpress.com/sync"
@@ -230,6 +248,7 @@ keep_alive()
 print("✅ בוט פעיל ומוכן!")
 bot.infinity_polling()
 # Redeploy check
+
 
 
 
