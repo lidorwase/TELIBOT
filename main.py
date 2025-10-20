@@ -13,7 +13,8 @@ ALI_APP_KEY = "520472"                                                # מהצי
 ALI_APP_SECRET = "z9YA6zx5tsXojNNdysNWDgcfmtAlSWwo"                   # ה־App Secret שלך
 
 # OpenAI (לא חובה, רק אם תרצה שהבוט יכתוב תיאור שיווקי חכם)
-OPENAI_API_KEY = "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"  # אם תרצה שאוסיף תיאור AI – הדבק כאן מפתח OpenAI
+import os
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 ALI_GATEWAY = "https://api-sg.aliexpress.com/sync"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -220,4 +221,5 @@ def send_post(m):
 keep_alive()
 print("✅ בוט פעיל ומוכן!")
 bot.infinity_polling()
+
 
