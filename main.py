@@ -103,6 +103,10 @@ def pull_product(url: str) -> Optional[Dict[str, Optional[str]]]:
         logger.error(f"⚠️ שגיאה ב-pull_product: {e}")
         return None
 
+def ali_sign(params: Dict[str, Optional[str]], app_secret: str) -> str:
+    sorted_items = sorted((k, v) for k, v in params.items() if k != "sign" and v is not None)
+    joined = "".join(f"{k}{v}" for k, v in sorted_items)
+    return hmac.new(app_secret.encode(), joined.encode(), hashlib.sha256).hexdigest().upper()
 
 def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     ts = str(int(time.time() * 1000))
