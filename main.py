@@ -8,6 +8,7 @@ import logging
 import requests
 import urllib.parse
 import json
+import openai
 
 from dotenv import load_dotenv
 from telebot import TeleBot, types
@@ -46,20 +47,24 @@ def webhook():
 # --- חיבור OpenAI ---
 openai = OpenAI(api_key=OPENAI_API_KEY)
 
-def generate_description(title: str) -> str:
+def generate_description(title: str, price: str, rating: str, orders: str) -> Optional[str]:
     try:
-        response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "אתה עוזר שיווקי שכותב תיאורים שיווקיים קצרים בעברית"},
-                {"role": "user", "content": f"תכתוב תיאור שיווקי קצר למוצר בשם: {title}"}
-            ]
+        prompt = (
+            f"תאר לי בקצרה מוצר למכירה באלי אקספרס:\n"
+            f"שם המוצר: {title}\n"
+            f"מחיר: {price}₪\n"
+            f"דירוג: {rating} כוכבים\n"
+            f"הזמנות: {orders} הזמנות\n"
+            f"\n"
+            f"תשובה:"
         )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"OpenAI error: {e}")
-        return ""
 
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=100
+        )
 # --- עיבוד קישור ---
 def resolve_url(url: str) -> str:
     try:
@@ -176,20 +181,18 @@ def handle_link(message: Message):
 
         # תיאור עם OpenAI
         prompt = f"תאר את המוצר הבא בעברית בצורה שיווקית:\n{data['title']}"
-        ai_description = get_ai_description(prompt)
-
-        text = f"{ai_description}\n\nמחיר: {data['price']}\nדירוג: {data['rating']}\nהזמנות: {data['orders']}"
-
-        if data.get("image"):
-            bot.send_photo(CHANNEL_USERNAME, data["image"], caption=text)
-        else:
-            bot.send_message(CHANNEL_USERNAME, text)
-
-        bot.reply_to(message, "✅ פורסם לערוץ בהצלחה!")
-    
+        def get_ai_description(prompt: str) -> Optional[str]:
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=150
+        )
+        return response["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        logger.error(f"❗ שגיאה בטיפול בקישור: {e}")
-        bot.reply_to(message, "⚠️ התרחשה שגיאה בעת עיבוד הקישור.")
+        logger.error(f"❌ OpenAI error: {e}")
+        return None
 
 
 # --- /start ---
