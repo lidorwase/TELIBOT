@@ -118,7 +118,6 @@ def pull_product(link: str) -> Optional[Dict[str, str]]:
     params["sign"] = ali_sign(params, ALI_APP_SECRET)
 
     try:
-        res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
         response.raise_for_status()
 data = response.json()
 logger.error(f"📦 תשובת API מלאה:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
