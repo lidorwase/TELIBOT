@@ -7,6 +7,7 @@ import hashlib
 import logging
 import requests
 import urllib.parse
+import json
 
 from dotenv import load_dotenv
 from telebot import TeleBot, types
@@ -118,6 +119,10 @@ def pull_product(link: str) -> Optional[Dict[str, str]]:
 
     try:
         res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
+        response.raise_for_status()
+data = response.json()
+logger.error(f"📦 תשובת API מלאה:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
+
         res.raise_for_status()
         product = res.json()["aliexpress_affiliate_productdetail_get_response"]["result"]["products"][0]
         return {
