@@ -1,5 +1,13 @@
-pyTelegramBotAPI
-beautifulsoup4
 requests
 flask
+python-dotenv
+pyTelegramBotAPI
+beautifulsoup4
 openai
+tqdm
+h11
+httpcore
+httpx
+jinja2
+urllib3
+werkzeug
