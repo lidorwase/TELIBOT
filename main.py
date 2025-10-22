@@ -67,9 +67,15 @@ def generate_description(title: str, price: str, rating: str, orders: str) -> Op
         )
 # --- עיבוד קישור ---
 def resolve_url(url: str) -> str:
+    """
+    מנסה לפתור קישור מקוצר לקישור המלא (redirect).
+    אם נכשל - מחזיר את הקישור המקורי.
+    """
     try:
-        return requests.get(url, timeout=10).url
-    except:
+        response = requests.get(url, timeout=10, allow_redirects=True)
+        return response.url
+    except Exception as e:
+        logger.warning(f"⚠️ שגיאה ב-resolve_url: {e}")
         return url
 
 def extract_pid(url: str) -> Optional[str]:
