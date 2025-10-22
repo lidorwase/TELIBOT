@@ -49,22 +49,19 @@ openai = OpenAI(api_key=OPENAI_API_KEY)
 
 def generate_description(title: str, price: str, rating: str, orders: str) -> Optional[str]:
     try:
-        prompt = (
-            f"תאר לי בקצרה מוצר למכירה באלי אקספרס:\n"
-            f"שם המוצר: {title}\n"
-            f"מחיר: {price}₪\n"
-            f"דירוג: {rating} כוכבים\n"
-            f"הזמנות: {orders} הזמנות\n"
-            f"\n"
-            f"תשובה:"
-        )
+    risky_stuff()
+except Exception as e:
+    logger.error(f"שגיאה: {e}")  # ← חייב except לפני שממשיכים
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=100
-        )
+# עכשיו אפשר להגדיר פונקציה
+def resolve_url(url: str) -> str:
+    try:
+        response = requests.get(url, timeout=10, allow_redirects=True)
+        return response.url
+    except Exception as e:
+        logger.warning(f"שגיאה ב-resolve_url: {e}")
+        return url
+
 # --- עיבוד קישור ---
 def resolve_url(url: str) -> str:
     """
