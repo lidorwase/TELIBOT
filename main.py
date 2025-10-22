@@ -118,35 +118,35 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         "product_ids": product_id,
         "target_currency": "ILS",
         "target_language": "HE",
-        "need_promotion_link": "false",
+        "need_promotion_link": "true",
     }
     params["sign"] = ali_sign(params, ALI_APP_SECRET)
 
     try:
-        response = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        logger.error(f"📦 תשובת API מלאה:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
+        res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
+        res.raise_for_status()
+        data = res.json()
 
-        products = (
-            data.get("aliexpress_affiliate_productdetail_get_response", {})
-            .get("result", {})
-            .get("products", [])
-        )
-
+        # ✅ השינוי החשוב כאן
+        products = data["aliexpress_affiliate_productdetail_get_response"]["result"]["products"]["product"]
         if not isinstance(products, list) or not products:
-            logger.error(f"❌ No products returned for {product_id}")
+            logger.error("❌ No products returned for %s", product_id)
             return None
 
         product = products[0]
 
-        return {
-            "title": product.get("product_title"),
-            "image": product.get("product_main_image_url"),
-            "rating": product.get("evaluate_rate"),
-            "price": product.get("target_sale_price"),
-            "orders": product.get("sale_count"),
-        }
+    except Exception as exc:
+        logger.error(f"❌ API error: {exc}")
+        return None
+
+    return {
+        "title": product.get("product_title"),
+        "image": product.get("product_main_image_url"),
+        "rating": product.get("evaluate_rate"),
+        "price": product.get("target_sale_price"),
+        "orders": product.get("lastest_volume"),
+        "link": product.get("promotion_link"),
+    }
 
     except Exception as exc:
         logger.error(f"❌ API error: {exc}")
