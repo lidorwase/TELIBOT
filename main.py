@@ -1,4 +1,3 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/main.py b/main.py
 index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..0a2a555146a11a9f293ba6ba621f83ebd82ae736 100644
 --- a/main.py
