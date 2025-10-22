@@ -127,44 +127,38 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         res.raise_for_status()
         data = res.json()
 
-        # ✅ השינוי החשוב כאן
-        products = data["aliexpress_affiliate_productdetail_get_response"]["result"]["products"]["product"]
+        # הדפסה ללוג לצורכי דיבוג
+        logger.debug(f"📦 תשובת API מלאה:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
+
+        # חלק מהמקרים מחזירים products כ-object עם product בפנים
+        result = data.get("aliexpress_affiliate_productdetail_get_response", {}).get("result", {})
+        if "products" in result and "product" in result["products"]:
+            products = result["products"]["product"]
+        elif "products" in result and isinstance(result["products"], list):
+            products = result["products"]
+        else:
+            logger.error(f"❌ No valid product list in API result for {product_id}")
+            return None
+
         if not isinstance(products, list) or not products:
-            logger.error("❌ No products returned for %s", product_id)
+            logger.error(f"❌ Empty product list for {product_id}")
             return None
 
         product = products[0]
 
-    except Exception as exc:
-        logger.error(f"❌ API error: {exc}")
-        return None
-
-    return {
-        "title": product.get("product_title"),
-        "image": product.get("product_main_image_url"),
-        "rating": product.get("evaluate_rate"),
-        "price": product.get("target_sale_price"),
-        "orders": product.get("lastest_volume"),
-        "link": product.get("promotion_link"),
-    }
-
-    except Exception as exc:
-        logger.error(f"❌ API error: {exc}")
-        return None
-
-
-        res.raise_for_status()
-        product = res.json()["aliexpress_affiliate_productdetail_get_response"]["result"]["products"][0]
         return {
-            "title": product["product_title"],
-            "image": product["product_main_image_url"],
-            "price": product["target_sale_price"],
-            "rating": product["evaluate_rate"],
-            "orders": product["sale_count"],
+            "title": product.get("product_title"),
+            "image": product.get("product_main_image_url"),
+            "rating": product.get("evaluate_rate"),
+            "price": product.get("target_sale_price"),
+            "orders": product.get("lastest_volume"),
+            "link": product.get("promotion_link"),
         }
-    except Exception as e:
-        logger.error(f"API error: {e}")
+
+    except Exception as exc:
+        logger.error(f"❌ API error: {exc}")
         return None
+
 
 from telebot.types import Message
 
