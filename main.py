@@ -119,7 +119,7 @@ def pull_product(link: str) -> Optional[Dict[str, str]]:
 
     try:
          res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
-data = response.json()
+                response.raise_for_status()
 logger.error(f"📦 תשובת API מלאה:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
 except Exception as exc:
     logger.error(f"❌ API error: {exc}")
