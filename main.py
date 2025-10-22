@@ -93,19 +93,9 @@ def extract_pid(url: str) -> Optional[str]:
     return None
 
 
-def ali_sign(params: Dict[str, Optional[str]], secret: str) -> str:
-    sorted_items = sorted((k, v) for k, v in params.items() if k != "sign" and v)
-    joined = "".join(f"{k}{v}" for k, v in sorted_items)
-    return hmac.new(secret.encode(), joined.encode(), hashlib.sha256).hexdigest().upper()
-
-def pull_product(link: str) -> Optional[Dict[str, str]]:
-    url = resolve_url(link)
-    product_id = extract_pid(url)
-    if not product_id:
-        return None
-
+def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     ts = str(int(time.time() * 1000))
-    params = {
+    params: Dict[str, Optional[str]] = {
         "app_key": ALI_APP_KEY,
         "method": "aliexpress.affiliate.productdetail.get",
         "sign_method": "sha256",
@@ -118,12 +108,35 @@ def pull_product(link: str) -> Optional[Dict[str, str]]:
     params["sign"] = ali_sign(params, ALI_APP_SECRET)
 
     try:
-         res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
-                response.raise_for_status()
-logger.error(f"📦 תשובת API מלאה:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
-except Exception as exc:
-    logger.error(f"❌ API error: {exc}")
-    return None
+        response = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        logger.error(f"📦 תשובת API מלאה:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
+
+        products = (
+            data.get("aliexpress_affiliate_productdetail_get_response", {})
+            .get("result", {})
+            .get("products", [])
+        )
+
+        if not isinstance(products, list) or not products:
+            logger.error(f"❌ No products returned for {product_id}")
+            return None
+
+        product = products[0]
+
+        return {
+            "title": product.get("product_title"),
+            "image": product.get("product_main_image_url"),
+            "rating": product.get("evaluate_rate"),
+            "price": product.get("target_sale_price"),
+            "orders": product.get("sale_count"),
+        }
+
+    except Exception as exc:
+        logger.error(f"❌ API error: {exc}")
+        return None
+
 
         res.raise_for_status()
         product = res.json()["aliexpress_affiliate_productdetail_get_response"]["result"]["products"][0]
