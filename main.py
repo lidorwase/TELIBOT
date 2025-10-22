@@ -122,6 +122,9 @@ def pull_product(link: str) -> Optional[Dict[str, str]]:
         response.raise_for_status()
 data = response.json()
 logger.error(f"📦 תשובת API מלאה:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
+except Exception as exc:
+    logger.error(f"❌ API error: {exc}")
+    return None
 
         res.raise_for_status()
         product = res.json()["aliexpress_affiliate_productdetail_get_response"]["result"]["products"][0]
