@@ -32,7 +32,7 @@ def webhook():
     else:
         return "Unsupported Media Type", 415
 
-@bot.message_handler(func=lambda m: isinstance(m.text, str) and "aliexpress" in m.text.lower())
+@bot.message_handler(func=lambda m: isinstance(m.text, str) and "http" in m.text.lower())
 def handle_link(message: Message):
     print(f"📩 קיבלתי קישור: {message.text}")
 
