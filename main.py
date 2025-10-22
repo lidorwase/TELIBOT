@@ -1,4 +1,3 @@
-
 from flask import Flask, request
 import telebot
 from telebot.types import Update
@@ -32,24 +31,32 @@ def webhook():
     else:
         return "Unsupported Media Type", 415
 
+from telebot.types import Message  # ודא שזה קיים בתחילת הקובץ
+
 @bot.message_handler(func=lambda m: isinstance(m.text, str) and "http" in m.text.lower())
 def handle_link(message: Message):
-    print(f"📩 קיבלתי קישור: {message.text}")
+    try:
+        link = message.text.strip()
+        logger.info(f"📩 קיבלתי קישור: {link}")
 
-    link = message.text.strip()
-    data = pull_product(link)
-    if not data:
-        bot.reply_to(message, "❌ לא הצלחתי לשלוף את פרטי המוצר.")
-        return
+        data = pull_product(link)
+        if not data:
+            bot.reply_to(message, "❌ לא הצלחתי לשלוף את פרטי המוצר.")
+            return
 
-    text = f"{data['title']}\nמחיר: {data['price']}\nדירוג: {data['rating']}\nהזמנות: {data['orders']}"
+        text = f"{data['title']}\nמחיר: {data['price']}\nדירוג: {data['rating']}\nהזמנות: {data['orders']}"
 
-    if data.get("image"):
-        bot.send_photo(CHANNEL_USERNAME, data["image"], caption=text)
-    else:
-        bot.send_message(CHANNEL_USERNAME, text)
+        if data.get("image"):
+            bot.send_photo(CHANNEL_USERNAME, data["image"], caption=text)
+        else:
+            bot.send_message(CHANNEL_USERNAME, text)
 
-    bot.reply_to(message, "✅ פורסם לערוץ בהצלחה!")
+        bot.reply_to(message, "✅ פורסם לערוץ בהצלחה!")
+    
+    except Exception as e:
+        logger.error(f"❗ שגיאה בטיפול בקישור: {e}")
+        bot.reply_to(message, "⚠️ התרחשה שגיאה בעת עיבוד הקישור.")
+
 
     bot.reply_to(message, "היי! אני חי ובועט 🦾 שלח לי קישור לאלי אקספרס 📦")
 
