@@ -115,9 +115,10 @@ def pull_product(link: str) -> Optional[Dict[str, str]]:
         logger.error(f"API error: {e}")
         return None
 
-# --- שליחת קישור ---
+from telebot.types import Message
+
 @bot.message_handler(func=lambda m: isinstance(m.text, str) and "http" in m.text.lower())
-def handle_link(message: types.Message):
+def handle_link(message: Message):
     try:
         link = message.text.strip()
         logger.info(f"📩 קיבלתי קישור: {link}")
@@ -127,18 +128,23 @@ def handle_link(message: types.Message):
             bot.reply_to(message, "❌ לא הצלחתי לשלוף את פרטי המוצר.")
             return
 
-        description = generate_description(data["title"])
-        text = f"{html.escape(data['title'])}\n{description}\n💰 מחיר: {data['price']}\n⭐ דירוג: {data['rating']}\n📦 הזמנות: {data['orders']}"
+        # תיאור עם OpenAI
+        prompt = f"תאר את המוצר הבא בעברית בצורה שיווקית:\n{data['title']}"
+        ai_description = get_ai_description(prompt)
 
-        if data["image"]:
+        text = f"{ai_description}\n\nמחיר: {data['price']}\nדירוג: {data['rating']}\nהזמנות: {data['orders']}"
+
+        if data.get("image"):
             bot.send_photo(CHANNEL_USERNAME, data["image"], caption=text)
         else:
             bot.send_message(CHANNEL_USERNAME, text)
 
         bot.reply_to(message, "✅ פורסם לערוץ בהצלחה!")
+    
     except Exception as e:
-        logger.error(f"שגיאה בטיפול בקישור: {e}")
-        bot.reply_to(message, "⚠️ שגיאה פנימית בטיפול בקישור.")
+        logger.error(f"❗ שגיאה בטיפול בקישור: {e}")
+        bot.reply_to(message, "⚠️ התרחשה שגיאה בעת עיבוד הקישור.")
+
 
 # --- /start ---
 @bot.message_handler(commands=["start"])
