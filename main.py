@@ -67,14 +67,30 @@ def resolve_url(url: str) -> str:
         return url
 
 def extract_pid(url: str) -> Optional[str]:
-    match = re.search(r"/item/(\d+)\.html", url)
+    resolved = resolve_url(url)
+    logger.info(f"Resolved to: {resolved}")
+    
+    # תנסה למצוא ID לפי דפוס של AliExpress
+    match = re.search(r"/item/(\d+)\.html", resolved)
     if match:
         return match.group(1)
-    query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    
+    # חפש במספר משתנים ב-URL
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(resolved).query)
     for key in ("productId", "itemId", "item_id", "objectId"):
-        if key in query:
-            return re.sub(r"\D", "", query[key][0])
+        if key in query and query[key]:
+            pid = re.sub(r"\D", "", query[key][0])
+            if pid:
+                return pid
+
+    # ניסיון נוסף לחלץ מתוך מסלול הקישור
+    match = re.search(r"/(\d{10,20})", resolved)
+    if match:
+        return match.group(1)
+
+    logger.warning(f"⚠️ לא נמצא product_id מתוך: {resolved}")
     return None
+
 
 def ali_sign(params: Dict[str, Optional[str]], secret: str) -> str:
     sorted_items = sorted((k, v) for k, v in params.items() if k != "sign" and v)
