@@ -1,9 +1,9 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/main.py b/main.py
-index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069103f876b 100644
+index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..0a2a555146a11a9f293ba6ba621f83ebd82ae736 100644
 --- a/main.py
 +++ b/main.py
-@@ -1,171 +1,268 @@
+@@ -1,171 +1,313 @@
 +import html
 +import logging
  import os
@@ -14,9 +14,8 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
  import hmac
  import hashlib
  import urllib.parse
-+from typing import Dict, Optional
++from typing import Dict, Optional, Tuple
 +
-+import openai
  import requests
 -from bs4 import BeautifulSoup
  import telebot
@@ -27,6 +26,16 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
 -from dotenv import load_dotenv
 -import os
 +from telebot.types import Message
++
++try:  # Prefer the modern OpenAI client when available
++    from openai import OpenAI
++except ImportError:  # pragma: no cover - fall back to legacy import style
++    OpenAI = None  # type: ignore[assignment]
++
++try:  # Legacy ``openai`` module for <1.x versions
++    import openai as openai_legacy
++except ImportError:  # pragma: no cover - the library is optional
++    openai_legacy = None  # type: ignore[assignment]
 +
 +
 +logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -44,18 +53,11 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
  
 -# טוען את קובץ .env
 -load_dotenv(dotenv_path=".env", override=True)
-+def validate_env_variables() -> Dict[str, str]:
-+    """Load and validate required environment variables."""
++def validate_env_variables() -> Tuple[Dict[str, str], Dict[str, Optional[str]]]:
++    """Load required and optional environment variables."""
  
-+    required = [
-+        "BOT_TOKEN",
-+        "CHANNEL_USERNAME",
-+        "ALI_APP_KEY",
-+        "ALI_APP_SECRET",
-+        "OPENAI_API_KEY",
-+    ]
-+    loaded: Dict[str, str] = {}
-+    missing = []
++    required = ["BOT_TOKEN", "CHANNEL_USERNAME", "ALI_APP_KEY", "ALI_APP_SECRET"]
++    optional = ["OPENAI_API_KEY"]
  
 -# ====== LOAD ENVIRONMENT VARIABLES ======
 -BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -63,6 +65,11 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
 -ALI_APP_KEY = os.getenv("ALI_APP_KEY")
 -ALI_APP_SECRET = os.getenv("ALI_APP_SECRET")
 -OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
++    loaded: Dict[str, str] = {}
++    optional_values: Dict[str, Optional[str]] = {}
++    missing = []
+ 
+-openai.api_key = OPENAI_API_KEY
 +    logger.info("🔍 Checking environment variables…")
 +    for var in required:
 +        value = os.getenv(var)
@@ -72,18 +79,25 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
 +        else:
 +            logger.error("❌ %s is missing!", var)
 +            missing.append(var)
- 
--openai.api_key = OPENAI_API_KEY
++
++    for var in optional:
++        value = os.getenv(var)
++        if value:
++            logger.info("ℹ️ %s loaded (%d chars)", var, len(value))
++        else:
++            logger.warning("⚠️ %s not set – falling back to static copy", var)
++        optional_values[var] = value
++
 +    if missing:
 +        raise EnvironmentError(
 +            "Missing required environment variables: " + ", ".join(missing)
 +        )
 +
 +    logger.info("------------------------------------------------")
-+    return loaded
++    return loaded, optional_values
 +
 +
-+ENV = validate_env_variables()
++REQUIRED_ENV, OPTIONAL_ENV = validate_env_variables()
  
 -# ====== DEBUG: Check Variables Loaded ======
 -print("🔍 Checking environment variables...")
@@ -91,16 +105,28 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
 -    value = os.getenv(var)
 -    if value:
 -        print(f"✅ {var} loaded ({len(value)} chars)")
--    else:
++BOT_TOKEN = REQUIRED_ENV["BOT_TOKEN"]
++CHANNEL_USERNAME = REQUIRED_ENV["CHANNEL_USERNAME"]
++ALI_APP_KEY = REQUIRED_ENV["ALI_APP_KEY"]
++ALI_APP_SECRET = REQUIRED_ENV["ALI_APP_SECRET"]
++OPENAI_API_KEY = OPTIONAL_ENV.get("OPENAI_API_KEY") or ""
++
++OPENAI_CLIENT: Optional[object] = None
++OPENAI_USES_MODERN_API = False
++
++if OPENAI_API_KEY:
++    if OpenAI is not None:
++        OPENAI_CLIENT = OpenAI(api_key=OPENAI_API_KEY)
++        OPENAI_USES_MODERN_API = True
++    elif openai_legacy is not None:
++        openai_legacy.api_key = OPENAI_API_KEY
++        OPENAI_CLIENT = openai_legacy
+     else:
 -        print(f"❌ {var} is missing!")
 -print("------------------------------------------------")
-+BOT_TOKEN = ENV["BOT_TOKEN"]
-+CHANNEL_USERNAME = ENV["CHANNEL_USERNAME"]
-+ALI_APP_KEY = ENV["ALI_APP_KEY"]
-+ALI_APP_SECRET = ENV["ALI_APP_SECRET"]
-+OPENAI_API_KEY = ENV["OPENAI_API_KEY"]
-+
-+openai.api_key = OPENAI_API_KEY
++        logger.warning(
++            "OpenAI library not installed – marketing copy will use a static fallback"
++        )
  
  # ====== INITIAL SETUP ======
  bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
@@ -232,11 +258,8 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
 +        product = products[0]
 +    except (requests.RequestException, ValueError, KeyError) as exc:
 +        logger.error("Failed to fetch product %s: %s", product_id, exc)
-         return None
- 
--def pull_product(url):
--    pid = extract_pid(resolve_url(url))
--    return ali_productdetail(pid)
++        return None
++
 +    return {
 +        "title": product.get("product_title"),
 +        "image": product.get("product_main_image_url"),
@@ -252,9 +275,12 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
 +    product_id = extract_pid(resolve_url(url))
 +    if not product_id:
 +        logger.warning("Could not extract product id from %s", url)
-+        return None
+         return None
 +    return ali_productdetail(product_id)
-+
+ 
+-def pull_product(url):
+-    pid = extract_pid(resolve_url(url))
+-    return ali_productdetail(pid)
  
  # ====== AI MARKETING COPY ======
 -def generate_description_ai(title):
@@ -264,8 +290,27 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
 +        f"כתוב תיאור שיווקי בעברית למוצר בשם: {title}. "
 +        "השתמש בסגנון מושך, קצר ואמין, עם דגש על יתרונות, בלי הגזמות."
 +    )
++    if not OPENAI_CLIENT:
++        return f"{title} - מוצר איכותי ושימושי במיוחד 👌"
++
      try:
-         response = openai.ChatCompletion.create(
+-        response = openai.ChatCompletion.create(
++        if OPENAI_USES_MODERN_API:
++            response = OPENAI_CLIENT.chat.completions.create(
++                model="gpt-3.5-turbo",
++                messages=[
++                    {
++                        "role": "system",
++                        "content": "אתה כותב תיאורים שיווקיים קצרים למוצרים",
++                    },
++                    {"role": "user", "content": prompt},
++                ],
++                max_tokens=100,
++                temperature=0.8,
++            )
++            return response.choices[0].message.content.strip()
++
++        response = OPENAI_CLIENT.ChatCompletion.create(
              model="gpt-3.5-turbo",
 -            messages=[{"role": "system", "content": "אתה כותב תיאורים שיווקיים קצרים למוצרים"},
 -                      {"role": "user", "content": prompt}],
@@ -304,12 +349,12 @@ index 83909b0e29bdf4dcc295fcf5db9cc435f3af1fd6..94688e25c1a546dd5a36ca718957b069
 +    safe_rating = html.escape(str(rating))
 +    safe_orders = html.escape(str(orders))
 +    safe_url = html.escape(url, quote=True)
-+
-+    text = f"""<b>{safe_title}</b>
  
 -⭐ דירוג: {rating}
 -💰 מחיר: {price} ₪
 -📦 הזמנות: {orders}
++    text = f"""<b>{safe_title}</b>
++
 +{safe_description}
 +
 +⭐ דירוג: {safe_rating}
