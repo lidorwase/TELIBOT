@@ -92,6 +92,17 @@ def extract_pid(url: str) -> Optional[str]:
     logger.warning(f"⚠️ לא נמצא product_id מתוך: {resolved}")
     return None
 
+def pull_product(url: str) -> Optional[Dict[str, Optional[str]]]:
+    try:
+        product_id = extract_pid(resolve_url(url))
+        if not product_id:
+            logger.warning("Could not extract product id from %s", url)
+            return None
+        return ali_productdetail(product_id)
+    except Exception as e:
+        logger.error(f"⚠️ שגיאה ב-pull_product: {e}")
+        return None
+
 
 def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     ts = str(int(time.time() * 1000))
