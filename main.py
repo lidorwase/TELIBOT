@@ -12,6 +12,22 @@ import telebot
 from flask import Flask
 from threading import Thread
 import openai
+from dotenv import load_dotenv
+import os
+
+# טען את קובץ ה־.env באופן מפורש
+load_dotenv(dotenv_path=".env", override=True)
+
+# הדפס לבדיקה
+print("Loaded vars:", {k: bool(os.getenv(k)) for k in ["BOT_TOKEN", "CHANNEL_USERNAME", "ALI_APP_KEY", "ALI_APP_SECRET", "OPENAI_API_KEY"]})
+from dotenv import load_dotenv
+import os
+import re
+import requests
+
+# טוען את קובץ .env
+load_dotenv(dotenv_path=".env", override=True)
+
 
 # ====== LOAD ENVIRONMENT VARIABLES ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
