@@ -32,8 +32,26 @@ def webhook():
     else:
         return "Unsupported Media Type", 415
 
-@bot.message_handler(commands=['start'])
-def handle_start(message):
+@bot.message_handler(func=lambda m: isinstance(m.text, str) and (
+    "aliexpress" in m.text.lower() or "s.click.aliexpress.com" in m.text.lower()))
+def handle_link(message: Message):
+    print(f"📩 קיבלתי קישור: {message.text}")  # חשוב להדפסה
+
+    link = message.text.strip()
+    data = pull_product(link)
+    if not data:
+        bot.reply_to(message, "❌ לא הצלחתי לשלוף את פרטי המוצר.")
+        return
+
+    text = f"{data['title']}\nמחיר: {data['price']}\nדירוג: {data['rating']}\nהזמנות: {data['orders']}"
+    
+    if data.get("image"):
+        bot.send_photo(CHANNEL_USERNAME, data["image"], caption=text)
+    else:
+        bot.send_message(CHANNEL_USERNAME, text)
+
+    bot.reply_to(message, "✅ פורסם לערוץ בהצלחה!")
+
     bot.reply_to(message, "היי! אני חי ובועט 🦾 שלח לי קישור לאלי אקספרס 📦")
 
 def main():
