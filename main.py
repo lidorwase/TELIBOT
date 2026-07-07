@@ -316,12 +316,14 @@ def receive_affiliate_link(message):
             caption=caption,
             parse_mode="HTML",
         )
+        
     else:
         bot.send_message(
             message.chat.id,
             caption,
             parse_mode="HTML"
         )
+        
     except Exception as e:
         logger.error(f"Affiliate handler error: {e}")
         bot.reply_to(message, "❌ שגיאה בהוספת קישור השותפים.")
