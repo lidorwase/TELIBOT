@@ -42,7 +42,7 @@ WEBHOOK_URL  = f"https://{os.getenv('RAILWAY_STATIC_URL')}{WEBHOOK_PATH}"
 
 CAPTION_LIMIT = 1024  # מגבלת Telegram לכיתוב תמונה
 
-waiting_for_link = {}
+waiting_for_affiliate = {}
 
 # --- Webhook ---
 @app.route(WEBHOOK_PATH, methods=["POST"])
@@ -241,6 +241,7 @@ def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
         f"💰 מחיר: {data.get('price')} ₪\n"
         f"⭐ דירוג: {data.get('rating')}\n"
         f"🛒 הזמנות: {data.get('orders')}\n"
+        f"🔗 <a href=\"{data.get('link')}\">לרכישה כאן</a>"
     )
     max_desc_len = CAPTION_LIMIT - len(footer) - 10  # 10 תווים buffer
     if len(description) > max_desc_len:
@@ -278,23 +279,9 @@ def handle_link(message: Message):
         )
         return
 
-
-        if data.get("image"):
-            bot.send_photo(
-                message.chat.id,
-                data["image"],
-                caption=caption,
-                parse_mode="HTML",
-            )
-        else:
-            bot.reply_to(message, caption, disable_web_page_preview=False)
-
-    except Exception as e:
-        logger.error(f"שגיאה ב-handle_link: {e}", exc_info=True)
-        bot.reply_to(message, "❌ אירעה שגיאה בעיבוד הקישור.")
         # --- קבלת קישור שותפים ---
 @bot.message_handler(
-    func=lambda m: m.chat.id in waiting_for_affiliate
+    func=lambda m: m.chat.id in waiting_for_affiliate and not m.text.startswith("/")
 )
 def receive_affiliate_link(message):
     try:
