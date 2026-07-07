@@ -266,19 +266,18 @@ def handle_link(message: Message):
             return
 
         description = generate_description(data) or data.get("title") or "מוצר מומלץ!"
-        caption = build_caption(data, description)
 
-        waiting_for_link[message.chat.id] = {
+        waiting_for_affiliate[message.chat.id] = {
             "data": data,
-            "caption": caption
+            "description": description
         }
 
         bot.reply_to(
             message,
-            "✅ המוצר מוכן!\nשלח עכשיו את קישור השותפים (s.click.aliexpress.com)"
+            "✅ קיבלתי את פרטי המוצר.\n\nשלח עכשיו את קישור השותפים שיופיע במודעה."
         )
-
         return
+
 
         if data.get("image"):
             bot.send_photo(
@@ -295,35 +294,34 @@ def handle_link(message: Message):
         bot.reply_to(message, "❌ אירעה שגיאה בעיבוד הקישור.")
         # --- קבלת קישור שותפים ---
 @bot.message_handler(
-    func=lambda m: m.chat.id in waiting_for_link
+    func=lambda m: m.chat.id in waiting_for_affiliate
 )
-def receive_affiliate_link(message: Message):
-    try:
-        affiliate_url = message.text.strip()
+def receive_affiliate_link(message):
 
-        saved = waiting_for_link.pop(message.chat.id)
+    affiliate_link = message.text.strip()
 
-        caption = (
-            saved["caption"]
-            + f'\n\n🔗 <a href="{affiliate_url}">לרכישה כאן</a>'
+    product = waiting_for_affiliate.pop(message.chat.id)
+
+    data = product["data"]
+    description = product["description"]
+
+    data["link"] = affiliate_link
+
+    caption = build_caption(data, description)
+
+    if data.get("image"):
+        bot.send_photo(
+            message.chat.id,
+            data["image"],
+            caption=caption,
+            parse_mode="HTML",
         )
-
-        data = saved["data"]
-
-        if data.get("image"):
-            bot.send_photo(
-                message.chat.id,
-                data["image"],
-                caption=caption,
-                parse_mode="HTML"
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                caption,
-                parse_mode="HTML"
-            )
-
+    else:
+        bot.send_message(
+            message.chat.id,
+            caption,
+            parse_mode="HTML"
+        )
     except Exception as e:
         logger.error(f"Affiliate handler error: {e}")
         bot.reply_to(message, "❌ שגיאה בהוספת קישור השותפים.")
