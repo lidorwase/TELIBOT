@@ -264,29 +264,16 @@ def start_cmd(message: types.Message):
 
 
 # --- הרצה ---
-def keep_alive():
-    Thread(
-        target=lambda: app.run(
-            host="0.0.0.0",
-            port=int(os.getenv("PORT", 8080)),
-        ),
-        daemon=True,  # Thread ימות עם התוכנית הראשית
-    ).start()
-
-
 def main():
-    keep_alive()
-
-try:
     bot.remove_webhook()
-except:
-    pass
+    bot.set_webhook(url=WEBHOOK_URL)
+    logger.info(f"Bot is live! Webhook: {WEBHOOK_URL}")
 
-time.sleep(1)
-
-bot.set_webhook(url=WEBHOOK_URL)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8080))
+    )
 
 
 if __name__ == "__main__":
     main()
-
