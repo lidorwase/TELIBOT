@@ -125,7 +125,7 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
 
     params["sign"] = ali_sign(params, ALI_APP_SECRET)
 
-        try:
+    try:
             time.sleep(1)
 
         res = requests.post(
