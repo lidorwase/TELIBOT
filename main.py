@@ -277,7 +277,11 @@ def handle_link(message: Message):
             message,
             "✅ קיבלתי את פרטי המוצר.\n\nשלח עכשיו את קישור השותפים שיופיע במודעה."
         )
-        return
+        
+    except Exception as e:
+        logger.error(f"שגיאה ב-handle_link: {e}", exc_info=True)
+        bot.reply_to(message, "❌ אירעה שגיאה בעיבוד הקישור.")
+        
 
         # --- קבלת קישור שותפים ---
 @bot.message_handler(
