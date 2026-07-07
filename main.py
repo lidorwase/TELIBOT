@@ -251,7 +251,11 @@ def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
 
 # --- Handler קישורים ---
 @bot.message_handler(
-    func=lambda m: isinstance(m.text, str) and "http" in m.text.lower()
+    func=lambda m: (
+        isinstance(m.text, str)
+        and "http" in m.text.lower()
+        and m.chat.id not in waiting_for_affiliate
+    )
 )
 def handle_link(message: Message):
     try:
