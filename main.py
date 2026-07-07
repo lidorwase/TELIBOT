@@ -42,6 +42,7 @@ WEBHOOK_URL  = f"https://{os.getenv('RAILWAY_STATIC_URL')}{WEBHOOK_PATH}"
 
 CAPTION_LIMIT = 1024  # מגבלת Telegram לכיתוב תמונה
 
+waiting_for_link = {}
 
 # --- Webhook ---
 @app.route(WEBHOOK_PATH, methods=["POST"])
@@ -193,7 +194,7 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         "rating": p.get("evaluate_rate"),
         "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
         "orders": p.get("lastest_volume") or p.get("sale_count"),
-        "link": p.get("promotion_link"),
+    
     }
 
 
@@ -240,7 +241,6 @@ def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
         f"💰 מחיר: {data.get('price')} ₪\n"
         f"⭐ דירוג: {data.get('rating')}\n"
         f"🛒 הזמנות: {data.get('orders')}\n"
-        f"🔗 <a href=\"{data.get('link')}\">לרכישה כאן</a>"
     )
     max_desc_len = CAPTION_LIMIT - len(footer) - 10  # 10 תווים buffer
     if len(description) > max_desc_len:
@@ -266,7 +266,19 @@ def handle_link(message: Message):
             return
 
         description = generate_description(data) or data.get("title") or "מוצר מומלץ!"
-        caption     = build_caption(data, description)
+        caption = build_caption(data, description)
+
+        waiting_for_link[message.chat.id] = {
+            "data": data,
+            "caption": caption
+        }
+
+        bot.reply_to(
+            message,
+            "✅ המוצר מוכן!\nשלח עכשיו את קישור השותפים (s.click.aliexpress.com)"
+        )
+
+        return
 
         if data.get("image"):
             bot.send_photo(
@@ -281,6 +293,40 @@ def handle_link(message: Message):
     except Exception as e:
         logger.error(f"שגיאה ב-handle_link: {e}", exc_info=True)
         bot.reply_to(message, "❌ אירעה שגיאה בעיבוד הקישור.")
+        # --- קבלת קישור שותפים ---
+@bot.message_handler(
+    func=lambda m: m.chat.id in waiting_for_link
+)
+def receive_affiliate_link(message: Message):
+    try:
+        affiliate_url = message.text.strip()
+
+        saved = waiting_for_link.pop(message.chat.id)
+
+        caption = (
+            saved["caption"]
+            + f'\n\n🔗 <a href="{affiliate_url}">לרכישה כאן</a>'
+        )
+
+        data = saved["data"]
+
+        if data.get("image"):
+            bot.send_photo(
+                message.chat.id,
+                data["image"],
+                caption=caption,
+                parse_mode="HTML"
+            )
+        else:
+            bot.send_message(
+                message.chat.id,
+                caption,
+                parse_mode="HTML"
+            )
+
+    except Exception as e:
+        logger.error(f"Affiliate handler error: {e}")
+        bot.reply_to(message, "❌ שגיאה בהוספת קישור השותפים.")
 
 
 # --- /start ---
