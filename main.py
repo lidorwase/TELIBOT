@@ -162,7 +162,7 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
            .get("resp_result", {})
            .get("result", {})
            .get("products")
-)
+        )
         if isinstance(products_container, dict) and "product" in products_container:
             products = products_container["product"]
 
