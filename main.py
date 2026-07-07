@@ -149,8 +149,8 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
                 time.sleep(2)
                 return None
 
-               logger.error(f"AliExpress API error: {error}")
-               return None
+            logger.error(f"AliExpress API error: {error}")
+            return None
 
         logger.info(
             "תשובת API:\n%s",
