@@ -297,32 +297,32 @@ def handle_link(message: Message):
     func=lambda m: m.chat.id in waiting_for_affiliate
 )
 def receive_affiliate_link(message):
+    try:
+        affiliate_link = message.text.strip()
 
-    affiliate_link = message.text.strip()
+        product = waiting_for_affiliate.pop(message.chat.id)
 
-    product = waiting_for_affiliate.pop(message.chat.id)
+        data = product["data"]
+        description = product["description"]
 
-    data = product["data"]
-    description = product["description"]
+        data["link"] = affiliate_link
 
-    data["link"] = affiliate_link
+        caption = build_caption(data, description)
 
-    caption = build_caption(data, description)
-
-    if data.get("image"):
-        bot.send_photo(
-            message.chat.id,
-            data["image"],
-            caption=caption,
-            parse_mode="HTML",
-        )
+        if data.get("image"):
+            bot.send_photo(
+                message.chat.id,
+                data["image"],
+                caption=caption,
+                parse_mode="HTML",
+            )
         
-    else:
-        bot.send_message(
-            message.chat.id,
-            caption,
-            parse_mode="HTML"
-        )
+        else:
+            bot.send_message(
+                message.chat.id,
+                caption,
+                parse_mode="HTML"
+            )
         
     except Exception as e:
         logger.error(f"Affiliate handler error: {e}")
