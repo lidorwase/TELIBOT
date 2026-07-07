@@ -124,9 +124,14 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     params["sign"] = ali_sign(params, ALI_APP_SECRET)
 
     try:
-        res = requests.post(
-            "https://api-sg.aliexpress.com/sync", data=params, timeout=15
-        )
+       res = requests.post(
+    "https://api-sg.aliexpress.com/sync",
+    data=params,
+    timeout=15
+)
+    logger.info(f"HTTP Status: {res.status_code}")
+logger.info(res.text)
+
         res.raise_for_status()
         data = res.json()
         logger.info(
@@ -167,18 +172,17 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     }
 
 
-def pull_product(url: str) -> Optional[Dict[str, Optional[str]]]:
-    """שולף מוצר מ-AliExpress לפי URL."""
-    try:
-        resolved   = resolve_url(url)          # <-- resolve פעם אחת בלבד!
-        product_id = extract_pid(resolved)     # <-- מעביר URL שכבר resolved
-        if not product_id:
-            logger.warning("Could not extract product id from: %s", resolved)
-            return None
-        return ali_productdetail(product_id)
-    except Exception as e:
-        logger.error(f"שגיאה ב-pull_product: {e}")
+def pull_product(url: str):
+    resolved = resolve_url(url)
+    logger.info(f"Resolved URL: {resolved}")
+
+    product_id = extract_pid(resolved)
+    logger.info(f"Extracted PID: {product_id}")
+
+    if not product_id:
         return None
+
+    return ali_productdetail(product_id)
 
 
 # --- יצירת תיאור שיווקי ---
