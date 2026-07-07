@@ -125,9 +125,9 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
 
     params["sign"] = ali_sign(params, ALI_APP_SECRET)
 
-    try:
+        try:
         time.sleep(1)
-        
+
         res = requests.post(
             "https://api-sg.aliexpress.com/sync",
             data=params,
@@ -138,19 +138,19 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         logger.info(f"Response: {res.text}")
 
         res.raise_for_status()
-data = res.json()
 
-if "error_response" in data:
-    error = data["error_response"]
+        data = res.json()
 
-    if error.get("code") == "ApiCallLimit":
-        logger.warning("AliExpress rate limit hit, waiting...")
-        time.sleep(2)
+        if "error_response" in data:
+            error = data["error_response"]
 
-        return ali_productdetail(product_id)
+            if error.get("code") == "ApiCallLimit":
+                logger.warning("AliExpress rate limit hit")
+                time.sleep(2)
+                return None
 
-    logger.error(f"AliExpress API error: {error}")
-    return None
+            logger.error(f"AliExpress API error: {error}")
+            return None
 
         logger.info(
             "תשובת API:\n%s",
