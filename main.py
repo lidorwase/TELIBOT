@@ -2,16 +2,15 @@ import os
 import re
 import hmac
 import time
-import html
 import hashlib
 import logging
 import requests
 import urllib.parse
 import json
-import openai
 
 from dotenv import load_dotenv
 from telebot import TeleBot, types
+from telebot.types import Message
 from flask import Flask, request
 from threading import Thread
 from openai import OpenAI
@@ -31,9 +30,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 bot = TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 
+# --- חיבור OpenAI (לקוח, לא דורס את המודול) ---
+client = OpenAI(api_key=OPENAI_API_KEY)
+
 # --- Webhook ---
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBHOOK_URL = f"https://{os.getenv('RAILWAY_STATIC_URL')}{WEBHOOK_PATH}"
+
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
@@ -44,30 +47,10 @@ def webhook():
         return "", 200
     return "Unsupported Media Type", 415
 
-# --- חיבור OpenAI ---
-openai = OpenAI(api_key=OPENAI_API_KEY)
 
-def generate_description(title: str, price: str, rating: str, orders: str) -> Optional[str]:
-    try:
-    risky_stuff()
-except Exception as e:
-    logger.error(f"שגיאה: {e}")  # ← חייב except לפני שממשיכים
-
-# עכשיו אפשר להגדיר פונקציה
+# --- עיבוד קישור (הגדרה אחת בלבד!) ---
 def resolve_url(url: str) -> str:
-    try:
-        response = requests.get(url, timeout=10, allow_redirects=True)
-        return response.url
-    except Exception as e:
-        logger.warning(f"שגיאה ב-resolve_url: {e}")
-        return url
-
-# --- עיבוד קישור ---
-def resolve_url(url: str) -> str:
-    """
-    מנסה לפתור קישור מקוצר לקישור המלא (redirect).
-    אם נכשל - מחזיר את הקישור המקורי.
-    """
+    """מנסה לפתור קישור מקוצר לקישור המלא. אם נכשל - מחזיר את המקורי."""
     try:
         response = requests.get(url, timeout=10, allow_redirects=True)
         return response.url
@@ -75,16 +58,15 @@ def resolve_url(url: str) -> str:
         logger.warning(f"⚠️ שגיאה ב-resolve_url: {e}")
         return url
 
+
 def extract_pid(url: str) -> Optional[str]:
     resolved = resolve_url(url)
     logger.info(f"Resolved to: {resolved}")
-    
-    # תנסה למצוא ID לפי דפוס של AliExpress
+
     match = re.search(r"/item/(\d+)\.html", resolved)
     if match:
         return match.group(1)
-    
-    # חפש במספר משתנים ב-URL
+
     query = urllib.parse.parse_qs(urllib.parse.urlparse(resolved).query)
     for key in ("productId", "itemId", "item_id", "objectId"):
         if key in query and query[key]:
@@ -92,7 +74,6 @@ def extract_pid(url: str) -> Optional[str]:
             if pid:
                 return pid
 
-    # ניסיון נוסף לחלץ מתוך מסלול הקישור
     match = re.search(r"/(\d{10,20})", resolved)
     if match:
         return match.group(1)
@@ -100,21 +81,12 @@ def extract_pid(url: str) -> Optional[str]:
     logger.warning(f"⚠️ לא נמצא product_id מתוך: {resolved}")
     return None
 
-def pull_product(url: str) -> Optional[Dict[str, Optional[str]]]:
-    try:
-        product_id = extract_pid(resolve_url(url))
-        if not product_id:
-            logger.warning("Could not extract product id from %s", url)
-            return None
-        return ali_productdetail(product_id)
-    except Exception as e:
-        logger.error(f"⚠️ שגיאה ב-pull_product: {e}")
-        return None
 
 def ali_sign(params: Dict[str, Optional[str]], app_secret: str) -> str:
     sorted_items = sorted((k, v) for k, v in params.items() if k != "sign" and v is not None)
     joined = "".join(f"{k}{v}" for k, v in sorted_items)
     return hmac.new(app_secret.encode(), joined.encode(), hashlib.sha256).hexdigest().upper()
+
 
 def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     ts = str(int(time.time() * 1000))
@@ -134,18 +106,20 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
         res.raise_for_status()
         data = res.json()
-
-        # DEBUG: לוג תשובת ה-API
         logger.info("📦 תשובת API מלאה:\n%s", json.dumps(data, indent=2, ensure_ascii=False))
 
-        products_container = data.get("aliexpress_affiliate_productdetail_get_response", {}).get("result", {}).get("products")
+        products_container = (
+            data.get("aliexpress_affiliate_productdetail_get_response", {})
+            .get("result", {})
+            .get("products")
+        )
 
         if isinstance(products_container, dict) and "product" in products_container:
             products = products_container["product"]
         elif isinstance(products_container, list):
             products = products_container
         else:
-            logger.error("❌ No valid product list in API result for %s", product_id)
+            logger.error("❌ No valid product list for %s", product_id)
             return None
 
         if not isinstance(products, list) or not products:
@@ -168,9 +142,42 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     }
 
 
+def pull_product(url: str) -> Optional[Dict[str, Optional[str]]]:
+    try:
+        product_id = extract_pid(resolve_url(url))
+        if not product_id:
+            logger.warning("Could not extract product id from %s", url)
+            return None
+        return ali_productdetail(product_id)
+    except Exception as e:
+        logger.error(f"⚠️ שגיאה ב-pull_product: {e}")
+        return None
 
-from telebot.types import Message
 
+# --- יצירת תיאור שיווקי עם OpenAI (תחביר חדש ותקין) ---
+def generate_description(data: Dict[str, Optional[str]]) -> Optional[str]:
+    try:
+        prompt = (
+            "כתוב תיאור שיווקי קצר, קולח ומושך בעברית למוצר הבא, "
+            "עם אימוג'ים וקריאה לפעולה:\n"
+            f"שם: {data.get('title')}\n"
+            f"מחיר: {data.get('price')} ₪\n"
+            f"דירוג: {data.get('rating')}\n"
+            f"כמות הזמנות: {data.get('orders')}"
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # מודל עדכני וזול
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=250,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"❌ OpenAI error: {e}")
+        return None
+
+
+# --- טיפול בקישורים ---
 @bot.message_handler(func=lambda m: isinstance(m.text, str) and "http" in m.text.lower())
 def handle_link(message: Message):
     try:
@@ -182,36 +189,53 @@ def handle_link(message: Message):
             bot.reply_to(message, "❌ לא הצלחתי לשלוף את פרטי המוצר.")
             return
 
-        # תיאור עם OpenAI
-        prompt = f"תאר את המוצר הבא בעברית בצורה שיווקית:\n{data['title']}"
-        def get_ai_description(prompt: str) -> Optional[str]:
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=150
+        description = generate_description(data)
+        if not description:
+            description = data.get("title") or "מוצר מומלץ!"
+
+        caption = (
+            f"{description}\n\n"
+            f"💰 מחיר: {data.get('price')} ₪\n"
+            f"⭐ דירוג: {data.get('rating')}\n"
+            f"🛒 הזמנות: {data.get('orders')}\n"
+            f"🔗 <a href=\"{data.get('link')}\">לרכישה כאן</a>"
         )
-        return response["choices"][0]["message"]["content"].strip()
+
+        if data.get("image"):
+            bot.send_photo(message.chat.id, data["image"], caption=caption)
+        else:
+            bot.reply_to(message, caption, disable_web_page_preview=False)
+
     except Exception as e:
-        logger.error(f"❌ OpenAI error: {e}")
-        return None
+        logger.error(f"❌ שגיאה ב-handle_link: {e}")
+        bot.reply_to(message, "❌ אירעה שגיאה בעיבוד הקישור.")
 
 
 # --- /start ---
 @bot.message_handler(commands=["start"])
 def start_cmd(message: types.Message):
-    bot.reply_to(message, "היי! שלח לי קישור למוצר מאלי אקספרס, ואני אפרסם אותו בערוץ עם תיאור שיווקי 🔥")
+    bot.reply_to(
+        message,
+        "היי! שלח לי קישור למוצר מאלי אקספרס, ואני אחזיר לך תיאור שיווקי מוכן 🔥",
+    )
+
 
 # --- הרצה ---
 def keep_alive():
-    Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))).start()
+    Thread(
+        target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    ).start()
+
 
 def main():
     keep_alive()
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL)
     logger.info(f"✅ Bot is live! Webhook set to: {WEBHOOK_URL}")
+
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
