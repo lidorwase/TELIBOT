@@ -276,9 +276,15 @@ def keep_alive():
 
 def main():
     keep_alive()
+
+try:
     bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    logger.info(f"Bot is live! Webhook: {WEBHOOK_URL}")
+except:
+    pass
+
+time.sleep(1)
+
+bot.set_webhook(url=WEBHOOK_URL)
 
 
 if __name__ == "__main__":
