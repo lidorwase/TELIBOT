@@ -21,23 +21,29 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# --- בדיקת משתני סביבה קריטיים בעלייה ---
+REQUIRED_ENV = ["BOT_TOKEN", "ALI_APP_KEY", "ALI_APP_SECRET", "OPENAI_API_KEY", "RAILWAY_STATIC_URL"]
+for var in REQUIRED_ENV:
+    if not os.getenv(var):
+        raise EnvironmentError(f"Missing required environment variable: {var}")
+
+BOT_TOKEN        = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
-ALI_APP_KEY = os.getenv("ALI_APP_KEY")
-ALI_APP_SECRET = os.getenv("ALI_APP_SECRET")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ALI_APP_KEY      = os.getenv("ALI_APP_KEY")
+ALI_APP_SECRET   = os.getenv("ALI_APP_SECRET")
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
 
-bot = TeleBot(BOT_TOKEN, parse_mode="HTML")
-app = Flask(__name__)
-
-# --- חיבור OpenAI (לקוח, לא דורס את המודול) ---
+bot    = TeleBot(BOT_TOKEN, parse_mode="HTML")
+app    = Flask(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Webhook ---
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
-WEBHOOK_URL = f"https://{os.getenv('RAILWAY_STATIC_URL')}{WEBHOOK_PATH}"
+WEBHOOK_URL  = f"https://{os.getenv('RAILWAY_STATIC_URL')}{WEBHOOK_PATH}"
+
+CAPTION_LIMIT = 1024  # מגבלת Telegram לכיתוב תמונה
 
 
+# --- Webhook ---
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
     if request.headers.get("content-type") == "application/json":
@@ -48,70 +54,89 @@ def webhook():
     return "Unsupported Media Type", 415
 
 
-# --- עיבוד קישור (הגדרה אחת בלבד!) ---
+# --- עיבוד קישור ---
 def resolve_url(url: str) -> str:
-    """מנסה לפתור קישור מקוצר לקישור המלא. אם נכשל - מחזיר את המקורי."""
+    """פותר קישור מקוצר לקישור המלא."""
     try:
-        response = requests.get(url, timeout=10, allow_redirects=True)
+        response = requests.get(
+            url,
+            timeout=10,
+            allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
         return response.url
     except Exception as e:
-        logger.warning(f"⚠️ שגיאה ב-resolve_url: {e}")
+        logger.warning(f"שגיאה ב-resolve_url: {e}")
         return url
 
 
-def extract_pid(url: str) -> Optional[str]:
-    resolved = resolve_url(url)
-    logger.info(f"Resolved to: {resolved}")
+def extract_pid(resolved_url: str) -> Optional[str]:
+    """
+    מקבל URL שכבר עבר resolve, ומחלץ ממנו את ה-product_id.
+    שים לב: לא קורא resolve_url שוב!
+    """
+    logger.info(f"Extracting PID from: {resolved_url}")
 
-    match = re.search(r"/item/(\d+)\.html", resolved)
+    # דפוס רגיל של AliExpress
+    match = re.search(r"/item/(\d+)\.html", resolved_url)
     if match:
         return match.group(1)
 
-    query = urllib.parse.parse_qs(urllib.parse.urlparse(resolved).query)
+    # חיפוש בפרמטרי ה-URL
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(resolved_url).query)
     for key in ("productId", "itemId", "item_id", "objectId"):
         if key in query and query[key]:
             pid = re.sub(r"\D", "", query[key][0])
             if pid:
                 return pid
 
-    match = re.search(r"/(\d{10,20})", resolved)
+    # חיפוש מספר ארוך במסלול
+    match = re.search(r"/(\d{10,20})", resolved_url)
     if match:
         return match.group(1)
 
-    logger.warning(f"⚠️ לא נמצא product_id מתוך: {resolved}")
+    logger.warning(f"לא נמצא product_id מתוך: {resolved_url}")
     return None
 
 
-def ali_sign(params: Dict[str, Optional[str]], app_secret: str) -> str:
-    sorted_items = sorted((k, v) for k, v in params.items() if k != "sign" and v is not None)
+def ali_sign(params: Dict[str, str], app_secret: str) -> str:
+    sorted_items = sorted(
+        (k, v) for k, v in params.items() if k != "sign" and v is not None
+    )
     joined = "".join(f"{k}{v}" for k, v in sorted_items)
-    return hmac.new(app_secret.encode(), joined.encode(), hashlib.sha256).hexdigest().upper()
+    return hmac.new(
+        app_secret.encode(), joined.encode(), hashlib.sha256
+    ).hexdigest().upper()
 
 
 def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     ts = str(int(time.time() * 1000))
-    params: Dict[str, Optional[str]] = {
-        "app_key": ALI_APP_KEY,
-        "method": "aliexpress.affiliate.productdetail.get",
-        "sign_method": "sha256",
-        "timestamp": ts,
-        "product_ids": product_id,
-        "target_currency": "ILS",
-        "target_language": "HE",
-        "need_promotion_link": "true",
+    params: Dict[str, str] = {
+        "app_key":            ALI_APP_KEY,
+        "method":             "aliexpress.affiliate.productdetail.get",
+        "sign_method":        "sha256",
+        "timestamp":          ts,
+        "product_ids":        product_id,
+        "target_currency":    "ILS",
+        "target_language":    "HE",
+        "need_promotion_link":"true",
     }
     params["sign"] = ali_sign(params, ALI_APP_SECRET)
 
     try:
-        res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
+        res = requests.post(
+            "https://api-sg.aliexpress.com/sync", data=params, timeout=15
+        )
         res.raise_for_status()
         data = res.json()
-        logger.info("📦 תשובת API מלאה:\n%s", json.dumps(data, indent=2, ensure_ascii=False))
+        logger.info(
+            "תשובת API:\n%s", json.dumps(data, indent=2, ensure_ascii=False)
+        )
 
         products_container = (
             data.get("aliexpress_affiliate_productdetail_get_response", {})
-            .get("result", {})
-            .get("products")
+                .get("result", {})
+                .get("products")
         )
 
         if isinstance(products_container, dict) and "product" in products_container:
@@ -119,46 +144,48 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         elif isinstance(products_container, list):
             products = products_container
         else:
-            logger.error("❌ No valid product list for %s", product_id)
+            logger.error("No valid product list for %s | raw: %s", product_id, data)
             return None
 
         if not isinstance(products, list) or not products:
-            logger.error("❌ Empty product list for %s", product_id)
+            logger.error("Empty product list for %s", product_id)
             return None
 
-        product = products[0]
+        p = products[0]
 
     except Exception as exc:
-        logger.error(f"❌ API error: {exc}")
+        logger.error(f"API error: {exc}")
         return None
 
     return {
-        "title": product.get("product_title"),
-        "image": product.get("product_main_image_url"),
-        "rating": product.get("evaluate_rate"),
-        "price": product.get("target_sale_price"),
-        "orders": product.get("lastest_volume") or product.get("sale_count"),
-        "link": product.get("promotion_link"),
+        "title":  p.get("product_title"),
+        "image":  p.get("product_main_image_url"),
+        "rating": p.get("evaluate_rate"),
+        "price":  p.get("target_sale_price"),
+        "orders": p.get("lastest_volume") or p.get("sale_count"),
+        "link":   p.get("promotion_link"),
     }
 
 
 def pull_product(url: str) -> Optional[Dict[str, Optional[str]]]:
+    """שולף מוצר מ-AliExpress לפי URL."""
     try:
-        product_id = extract_pid(resolve_url(url))
+        resolved   = resolve_url(url)          # <-- resolve פעם אחת בלבד!
+        product_id = extract_pid(resolved)     # <-- מעביר URL שכבר resolved
         if not product_id:
-            logger.warning("Could not extract product id from %s", url)
+            logger.warning("Could not extract product id from: %s", resolved)
             return None
         return ali_productdetail(product_id)
     except Exception as e:
-        logger.error(f"⚠️ שגיאה ב-pull_product: {e}")
+        logger.error(f"שגיאה ב-pull_product: {e}")
         return None
 
 
-# --- יצירת תיאור שיווקי עם OpenAI (תחביר חדש ותקין) ---
+# --- יצירת תיאור שיווקי ---
 def generate_description(data: Dict[str, Optional[str]]) -> Optional[str]:
     try:
         prompt = (
-            "כתוב תיאור שיווקי קצר, קולח ומושך בעברית למוצר הבא, "
+            "כתוב תיאור שיווקי קצר (עד 3 משפטים), קולח ומושך בעברית למוצר הבא, "
             "עם אימוג'ים וקריאה לפעולה:\n"
             f"שם: {data.get('title')}\n"
             f"מחיר: {data.get('price')} ₪\n"
@@ -166,48 +193,64 @@ def generate_description(data: Dict[str, Optional[str]]) -> Optional[str]:
             f"כמות הזמנות: {data.get('orders')}"
         )
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # מודל עדכני וזול
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=250,
+            max_tokens=200,  # קצר כדי לא לחרוג ממגבלת caption
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        logger.error(f"❌ OpenAI error: {e}")
+        logger.error(f"OpenAI error: {e}")
         return None
 
 
-# --- טיפול בקישורים ---
-@bot.message_handler(func=lambda m: isinstance(m.text, str) and "http" in m.text.lower())
+def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
+    """בונה caption ומוודא שלא עולה על 1024 תווים."""
+    footer = (
+        f"\n\n"
+        f"💰 מחיר: {data.get('price')} ₪\n"
+        f"⭐ דירוג: {data.get('rating')}\n"
+        f"🛒 הזמנות: {data.get('orders')}\n"
+        f"🔗 <a href=\"{data.get('link')}\">לרכישה כאן</a>"
+    )
+    max_desc_len = CAPTION_LIMIT - len(footer) - 10  # 10 תווים buffer
+    if len(description) > max_desc_len:
+        description = description[:max_desc_len].rstrip() + "..."
+    return description + footer
+
+
+# --- Handler קישורים ---
+@bot.message_handler(
+    func=lambda m: isinstance(m.text, str) and "http" in m.text.lower()
+)
 def handle_link(message: Message):
     try:
         link = message.text.strip()
-        logger.info(f"📩 קיבלתי קישור: {link}")
+        logger.info(f"קיבלתי קישור: {link}")
+
+        # אינדיקציה שהבוט עובד
+        bot.send_chat_action(message.chat.id, "typing")
 
         data = pull_product(link)
         if not data:
-            bot.reply_to(message, "❌ לא הצלחתי לשלוף את פרטי המוצר.")
+            bot.reply_to(message, "❌ לא הצלחתי לשלוף את פרטי המוצר.\nוודא שהקישור הוא ממוצר AliExpress תקין.")
             return
 
-        description = generate_description(data)
-        if not description:
-            description = data.get("title") or "מוצר מומלץ!"
-
-        caption = (
-            f"{description}\n\n"
-            f"💰 מחיר: {data.get('price')} ₪\n"
-            f"⭐ דירוג: {data.get('rating')}\n"
-            f"🛒 הזמנות: {data.get('orders')}\n"
-            f"🔗 <a href=\"{data.get('link')}\">לרכישה כאן</a>"
-        )
+        description = generate_description(data) or data.get("title") or "מוצר מומלץ!"
+        caption     = build_caption(data, description)
 
         if data.get("image"):
-            bot.send_photo(message.chat.id, data["image"], caption=caption)
+            bot.send_photo(
+                message.chat.id,
+                data["image"],
+                caption=caption,
+                parse_mode="HTML",
+            )
         else:
             bot.reply_to(message, caption, disable_web_page_preview=False)
 
     except Exception as e:
-        logger.error(f"❌ שגיאה ב-handle_link: {e}")
+        logger.error(f"שגיאה ב-handle_link: {e}", exc_info=True)
         bot.reply_to(message, "❌ אירעה שגיאה בעיבוד הקישור.")
 
 
@@ -216,14 +259,18 @@ def handle_link(message: Message):
 def start_cmd(message: types.Message):
     bot.reply_to(
         message,
-        "היי! שלח לי קישור למוצר מאלי אקספרס, ואני אחזיר לך תיאור שיווקי מוכן 🔥",
+        "היי! שלח לי קישור למוצר מאלי אקספרס ואני אחזיר לך תיאור שיווקי מוכן לפרסום.",
     )
 
 
 # --- הרצה ---
 def keep_alive():
     Thread(
-        target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+        target=lambda: app.run(
+            host="0.0.0.0",
+            port=int(os.getenv("PORT", 8080)),
+        ),
+        daemon=True,  # Thread ימות עם התוכנית הראשית
     ).start()
 
 
@@ -231,11 +278,10 @@ def main():
     keep_alive()
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL)
-    logger.info(f"✅ Bot is live! Webhook set to: {WEBHOOK_URL}")
+    logger.info(f"Bot is live! Webhook: {WEBHOOK_URL}")
 
 
 if __name__ == "__main__":
     main()
 
-if __name__ == "__main__":
     main()
