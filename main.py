@@ -157,12 +157,12 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
             json.dumps(data, indent=2, ensure_ascii=False)
         )
 
-        products_container = (
-            data.get("aliexpress_affiliate_productdetail_get_response", {})
-            .get("result", {})
-            .get("products")
-        )
-
+   products_container = (
+       data.get("aliexpress_affiliate_productdetail_get_response", {})
+           .get("resp_result", {})
+           .get("result", {})
+           .get("products")
+)
         if isinstance(products_container, dict) and "product" in products_container:
             products = products_container["product"]
 
@@ -191,7 +191,7 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         "title": p.get("product_title"),
         "image": p.get("product_main_image_url"),
         "rating": p.get("evaluate_rate"),
-        "price": p.get("target_sale_price"),
+        "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
         "orders": p.get("lastest_volume") or p.get("sale_count"),
         "link": p.get("promotion_link"),
     }
