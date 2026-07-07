@@ -111,45 +111,57 @@ def ali_sign(params: Dict[str, str], app_secret: str) -> str:
 
 def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     ts = str(int(time.time() * 1000))
+
     params: Dict[str, str] = {
-        "app_key":            ALI_APP_KEY,
-        "method":             "aliexpress.affiliate.productdetail.get",
-        "sign_method":        "sha256",
-        "timestamp":          ts,
-        "product_ids":        product_id,
-        "target_currency":    "ILS",
-        "target_language":    "HE",
-        "need_promotion_link":"true",
+        "app_key": ALI_APP_KEY,
+        "method": "aliexpress.affiliate.productdetail.get",
+        "sign_method": "sha256",
+        "timestamp": ts,
+        "product_ids": product_id,
+        "target_currency": "ILS",
+        "target_language": "HE",
+        "need_promotion_link": "true",
     }
+
     params["sign"] = ali_sign(params, ALI_APP_SECRET)
 
     try:
-       res = requests.post(
-    "https://api-sg.aliexpress.com/sync",
-    data=params,
-    timeout=15
-)
-    logger.info(f"HTTP Status: {res.status_code}")
-logger.info(res.text)
+        res = requests.post(
+            "https://api-sg.aliexpress.com/sync",
+            data=params,
+            timeout=15
+        )
+
+        logger.info(f"HTTP Status: {res.status_code}")
+        logger.info(f"Response: {res.text}")
 
         res.raise_for_status()
+
         data = res.json()
+
         logger.info(
-            "תשובת API:\n%s", json.dumps(data, indent=2, ensure_ascii=False)
+            "תשובת API:\n%s",
+            json.dumps(data, indent=2, ensure_ascii=False)
         )
 
         products_container = (
             data.get("aliexpress_affiliate_productdetail_get_response", {})
-                .get("result", {})
-                .get("products")
+            .get("result", {})
+            .get("products")
         )
 
         if isinstance(products_container, dict) and "product" in products_container:
             products = products_container["product"]
+
         elif isinstance(products_container, list):
             products = products_container
+
         else:
-            logger.error("No valid product list for %s | raw: %s", product_id, data)
+            logger.error(
+                "No valid product list for %s | raw: %s",
+                product_id,
+                data
+            )
             return None
 
         if not isinstance(products, list) or not products:
@@ -163,12 +175,12 @@ logger.info(res.text)
         return None
 
     return {
-        "title":  p.get("product_title"),
-        "image":  p.get("product_main_image_url"),
+        "title": p.get("product_title"),
+        "image": p.get("product_main_image_url"),
         "rating": p.get("evaluate_rate"),
-        "price":  p.get("target_sale_price"),
+        "price": p.get("target_sale_price"),
         "orders": p.get("lastest_volume") or p.get("sale_count"),
-        "link":   p.get("promotion_link"),
+        "link": p.get("promotion_link"),
     }
 
 
