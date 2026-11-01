@@ -266,6 +266,7 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         "image": p.get("product_main_image_url"),
         "rating": p.get("evaluate_rate"),
         "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
+        "original_price": p.get("target_original_price"),
         "orders": p.get("lastest_volume") or p.get("sale_count"),
     
     }
@@ -307,11 +308,33 @@ def generate_description(data: Dict[str, Optional[str]]) -> Optional[str]:
         return None
 
 
+def to_float(value) -> Optional[float]:
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def format_price(data: Dict[str, Optional[str]]) -> str:
+    """מחיר אחרי הנחה, ואם יש הנחה - גם המחיר המקורי מחוק ואחוז ההנחה."""
+    price = to_float(data.get("price"))
+    original = to_float(data.get("original_price"))
+    if price is None:
+        return f"{data.get('price')} ₪"
+    text = f"{price:.2f} ₪"
+    if original and original > price:
+        discount = round((1 - price / original) * 100)
+        text += f" במקום <s>{original:.2f} ₪</s>"
+        if discount >= 1:
+            text += f" ({discount}% הנחה)"
+    return text
+
+
 def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
     """בונה caption ומוודא שלא עולה על 1024 תווים."""
     footer = (
         f"\n\n"
-        f"💰 מחיר: {data.get('price')} ₪\n"
+        f"💰 מחיר: {format_price(data)}\n"
         f"⭐ דירוג: {data.get('rating')}\n"
         f"🛒 הזמנות: {data.get('orders')}\n"
         f"🔗 <a href=\"{data.get('link')}\">לרכישה כאן</a>"
@@ -501,12 +524,18 @@ def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
             continue
 
         p = random.choice(candidates[:15])  # אקראי מתוך הנמכרים ביותר
+        logger.info(
+            "מחירים מה-API למוצר %s: %s",
+            p.get("product_id"),
+            {k: v for k, v in p.items() if "price" in k or "discount" in k},
+        )
         return {
             "product_id": str(p.get("product_id")),
             "title": p.get("product_title"),
             "image": p.get("product_main_image_url"),
             "rating": p.get("evaluate_rate"),
             "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
+            "original_price": p.get("target_original_price"),
             "orders": p.get("lastest_volume"),
             "link": p.get("promotion_link"),
             "tracking_id": tracking_id,
