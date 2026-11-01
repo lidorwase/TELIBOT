@@ -400,43 +400,67 @@ def parse_percent(value) -> float:
         return 0.0
 
 
-def ali_hotproducts(keyword: str, page: int, tracking_id: str) -> List[Dict]:
-    """מחפש מוצרים פופולריים ב-AliExpress לפי מילת חיפוש."""
-    params: Dict[str, str] = {
-        "app_key": ALI_APP_KEY,
-        "method": "aliexpress.affiliate.hotproduct.query",
-        "sign_method": "sha256",
-        "timestamp": str(int(time.time() * 1000)),
-        "keywords": keyword,
-        "page_no": str(page),
-        "page_size": "50",
-        "sort": "LAST_VOLUME_DESC",
-        "target_currency": "ILS",
-        "target_language": "HE",
-        "ship_to_country": "IL",
-        "tracking_id": tracking_id,
-    }
-    if AUTO_MAX_PRICE:
-        params["max_sale_price"] = str(int(float(AUTO_MAX_PRICE) * 100))  # ב-API המחיר באגורות
-    params["sign"] = ali_sign(params, ALI_APP_SECRET)
+# שיטות חיפוש לפי סדר עדיפות. product.query זמינה לכל אפליקציית שותפים רגילה,
+# hotproduct.query דורשת הרשאה מתקדמת. הבוט זוכר איזו שיטה עבדה.
+SEARCH_METHODS = [
+    "aliexpress.affiliate.product.query",
+    "aliexpress.affiliate.hotproduct.query",
+]
+no_permission_methods = set()
 
-    res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
-    res.raise_for_status()
-    data = res.json()
 
-    if "error_response" in data:
-        logger.error(f"AliExpress hotproduct error: {data['error_response']}")
-        return []
+def ali_search_products(keyword: str, page: int, tracking_id: str) -> List[Dict]:
+    """מחפש מוצרים ב-AliExpress לפי מילת חיפוש, ממוינים לפי כמות מכירות."""
+    for method in SEARCH_METHODS:
+        if method in no_permission_methods:
+            continue
 
-    container = (
-        data.get("aliexpress_affiliate_hotproduct_query_response", {})
-            .get("resp_result", {})
-            .get("result", {})
-            .get("products")
+        params: Dict[str, str] = {
+            "app_key": ALI_APP_KEY,
+            "method": method,
+            "sign_method": "sha256",
+            "timestamp": str(int(time.time() * 1000)),
+            "keywords": keyword,
+            "page_no": str(page),
+            "page_size": "50",
+            "sort": "LAST_VOLUME_DESC",
+            "target_currency": "ILS",
+            "target_language": "HE",
+            "ship_to_country": "IL",
+            "tracking_id": tracking_id,
+        }
+        if AUTO_MAX_PRICE:
+            params["max_sale_price"] = str(int(float(AUTO_MAX_PRICE) * 100))  # ב-API המחיר באגורות
+        params["sign"] = ali_sign(params, ALI_APP_SECRET)
+
+        res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
+        res.raise_for_status()
+        data = res.json()
+
+        if "error_response" in data:
+            error = data["error_response"]
+            if error.get("code") == "InsufficientPermission":
+                logger.warning(f"אין הרשאה ל-{method}, מנסה שיטה אחרת")
+                no_permission_methods.add(method)
+                continue
+            logger.error(f"AliExpress search error ({method}): {error}")
+            return []
+
+        resp_result = (
+            data.get(method.replace(".", "_") + "_response", {}).get("resp_result", {})
+        )
+        if str(resp_result.get("resp_code", "200")) != "200":
+            logger.warning(f"AliExpress ({method}): {resp_result.get('resp_code')} {resp_result.get('resp_msg')}")
+
+        container = (resp_result.get("result") or {}).get("products")
+        if isinstance(container, dict):
+            container = container.get("product")
+        return container if isinstance(container, list) else []
+
+    logger.error(
+        "לאפליקציה אין הרשאה לאף שיטת חיפוש מוצרים: " + ", ".join(SEARCH_METHODS)
     )
-    if isinstance(container, dict):
-        container = container.get("product")
-    return container if isinstance(container, list) else []
+    return []
 
 
 def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
@@ -452,7 +476,7 @@ def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
 
     for tracking_id, keyword in options[:3]:  # עד 3 ניסיונות
         try:
-            products = ali_hotproducts(keyword, random.randint(1, 3), tracking_id)
+            products = ali_search_products(keyword, random.randint(1, 3), tracking_id)
         except Exception as e:
             logger.error(f"שגיאה בחיפוש '{keyword}' ({tracking_id}): {e}")
             continue
