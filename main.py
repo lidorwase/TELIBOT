@@ -77,17 +77,38 @@ AUTO_KEYWORDS = [
 # אם מוגדר - הבוט מחפש רק בקטגוריות האלה, וכל מוצר מקבל את ה-Tracking ID של הקטגוריה שלו.
 def parse_categories(raw: str) -> List[tuple]:
     categories = []
-    for part in raw.split(","):
+    raw = raw.strip().strip('"').strip("'")
+    for part in re.split(r"[,;\n]", raw):
         if ":" not in part:
             continue
         tracking_id, words = part.split(":", 1)
+        tracking_id = tracking_id.strip().strip('"').strip("'")
+        words = words.strip().strip('"').strip("'")
         keywords = [w.strip() for w in words.split("|") if w.strip()]
         if tracking_id.strip() and keywords:
             categories.append((tracking_id.strip(), keywords))
     return categories
 
 
-AUTO_CATEGORIES = parse_categories(os.getenv("AUTO_CATEGORIES", ""))
+AUTO_CATEGORIES_RAW = os.getenv("AUTO_CATEGORIES", "")
+AUTO_CATEGORIES = parse_categories(AUTO_CATEGORIES_RAW)
+
+
+def auto_config_status() -> str:
+    """תיאור קצר של הגדרות המציאה האוטומטית - לאבחון בעיות."""
+    if AUTO_CATEGORIES:
+        return "קטגוריות: " + ", ".join(tid for tid, _ in AUTO_CATEGORIES)
+    if AUTO_CATEGORIES_RAW:
+        return (
+            f"AUTO_CATEGORIES קיים ({len(AUTO_CATEGORIES_RAW)} תווים) אבל לא הצלחתי לקרוא אותו. "
+            f"מתחיל ב: {AUTO_CATEGORIES_RAW[:30]!r}"
+        )
+    if ALI_TRACKING_ID:
+        return f"Tracking ID יחיד: {ALI_TRACKING_ID}"
+    similar = [k for k in os.environ if "CATEG" in k.upper() or "TRACK" in k.upper()]
+    return "AUTO_CATEGORIES לא קיים בכלל" + (
+        f". משתנים עם שם דומה שכן קיימים: {', '.join(similar)}" if similar else ""
+    )
 AUTO_MIN_RATING = float(os.getenv("AUTO_MIN_RATING", "90"))   # דירוג מינימלי באחוזים
 AUTO_MIN_ORDERS = int(os.getenv("AUTO_MIN_ORDERS", "100"))     # מינימום הזמנות
 AUTO_MAX_PRICE  = os.getenv("AUTO_MAX_PRICE")                  # מחיר מקסימלי ב-₪ (לא חובה)
@@ -641,7 +662,10 @@ def autopost_cmd(message: types.Message):
         bot.reply_to(message, "❌ לא הוגדר CHANNEL_USERNAME")
         return
     if not ALI_TRACKING_ID and not AUTO_CATEGORIES:
-        bot.reply_to(message, "❌ לא הוגדרו ALI_TRACKING_ID או AUTO_CATEGORIES")
+        bot.reply_to(
+            message,
+            f"❌ לא הוגדרו ALI_TRACKING_ID או AUTO_CATEGORIES\n🔎 {auto_config_status()}",
+        )
         return
     bot.send_chat_action(message.chat.id, "typing")
     try:
@@ -667,7 +691,8 @@ def clearqueue_cmd(message: types.Message):
 def main():
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL)
-    logger.info(f"Bot is live! Webhook: {WEBHOOK_URL}")
+    logger.info("Bot is live! Webhook: " + WEBHOOK_URL.replace(BOT_TOKEN, "***"))
+    logger.info(f"Auto-find: {'on' if AUTO_FIND else 'off'} | {auto_config_status()}")
 
     if CHANNEL_USERNAME:
         Thread(target=scheduler_loop, daemon=True).start()
