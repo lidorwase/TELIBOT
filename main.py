@@ -71,6 +71,23 @@ AUTO_KEYWORDS = [
         "gadgets,kitchen,home organization,phone accessories,car accessories,smart home,camping",
     ).split(",") if k.strip()
 ]
+# Tracking ID נפרד לכל קטגוריה (לא חובה). פורמט:
+#   TRACKING_ID:מילת חיפוש|מילת חיפוש,TRACKING_ID:מילת חיפוש
+# למשל: CARS:car accessories|car gadgets,KITCHEN:kitchen gadgets
+# אם מוגדר - הבוט מחפש רק בקטגוריות האלה, וכל מוצר מקבל את ה-Tracking ID של הקטגוריה שלו.
+def parse_categories(raw: str) -> List[tuple]:
+    categories = []
+    for part in raw.split(","):
+        if ":" not in part:
+            continue
+        tracking_id, words = part.split(":", 1)
+        keywords = [w.strip() for w in words.split("|") if w.strip()]
+        if tracking_id.strip() and keywords:
+            categories.append((tracking_id.strip(), keywords))
+    return categories
+
+
+AUTO_CATEGORIES = parse_categories(os.getenv("AUTO_CATEGORIES", ""))
 AUTO_MIN_RATING = float(os.getenv("AUTO_MIN_RATING", "90"))   # דירוג מינימלי באחוזים
 AUTO_MIN_ORDERS = int(os.getenv("AUTO_MIN_ORDERS", "100"))     # מינימום הזמנות
 AUTO_MAX_PRICE  = os.getenv("AUTO_MAX_PRICE")                  # מחיר מקסימלי ב-₪ (לא חובה)
@@ -362,7 +379,7 @@ def parse_percent(value) -> float:
         return 0.0
 
 
-def ali_hotproducts(keyword: str, page: int) -> List[Dict]:
+def ali_hotproducts(keyword: str, page: int, tracking_id: str) -> List[Dict]:
     """מחפש מוצרים פופולריים ב-AliExpress לפי מילת חיפוש."""
     params: Dict[str, str] = {
         "app_key": ALI_APP_KEY,
@@ -376,7 +393,7 @@ def ali_hotproducts(keyword: str, page: int) -> List[Dict]:
         "target_currency": "ILS",
         "target_language": "HE",
         "ship_to_country": "IL",
-        "tracking_id": ALI_TRACKING_ID,
+        "tracking_id": tracking_id,
     }
     if AUTO_MAX_PRICE:
         params["max_sale_price"] = str(int(float(AUTO_MAX_PRICE) * 100))  # ב-API המחיר באגורות
@@ -404,14 +421,19 @@ def ali_hotproducts(keyword: str, page: int) -> List[Dict]:
 def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
     """מוצא מוצר טוב שעוד לא פורסם ומחזיר אותו בפורמט של build_caption."""
     posted = set(load_posted())
-    keywords = AUTO_KEYWORDS[:]
-    random.shuffle(keywords)
 
-    for keyword in keywords[:3]:  # עד 3 ניסיונות עם מילים שונות
+    # רשימת אפשרויות חיפוש: (tracking_id, מילת חיפוש)
+    if AUTO_CATEGORIES:
+        options = [(tid, random.choice(words)) for tid, words in AUTO_CATEGORIES]
+    else:
+        options = [(ALI_TRACKING_ID, k) for k in AUTO_KEYWORDS]
+    random.shuffle(options)
+
+    for tracking_id, keyword in options[:3]:  # עד 3 ניסיונות
         try:
-            products = ali_hotproducts(keyword, page=random.randint(1, 3))
+            products = ali_hotproducts(keyword, random.randint(1, 3), tracking_id)
         except Exception as e:
-            logger.error(f"שגיאה בחיפוש '{keyword}': {e}")
+            logger.error(f"שגיאה בחיפוש '{keyword}' ({tracking_id}): {e}")
             continue
 
         candidates = []
@@ -427,7 +449,9 @@ def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
             ):
                 candidates.append(p)
 
-        logger.info(f"חיפוש '{keyword}': {len(products)} מוצרים, {len(candidates)} מתאימים")
+        logger.info(
+            f"חיפוש '{keyword}' ({tracking_id}): {len(products)} מוצרים, {len(candidates)} מתאימים"
+        )
         if not candidates:
             continue
 
@@ -440,14 +464,15 @@ def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
             "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
             "orders": p.get("lastest_volume"),
             "link": p.get("promotion_link"),
+            "tracking_id": tracking_id,
         }
     return None
 
 
 def publish_auto_product() -> bool:
     """מוצא מוצר, כותב לו תיאור ומפרסם לערוץ. מחזיר True אם פורסם."""
-    if not ALI_TRACKING_ID:
-        logger.warning("ALI_TRACKING_ID לא מוגדר - לא ניתן למצוא מוצרים אוטומטית")
+    if not ALI_TRACKING_ID and not AUTO_CATEGORIES:
+        logger.warning("ALI_TRACKING_ID / AUTO_CATEGORIES לא מוגדרים - לא ניתן למצוא מוצרים אוטומטית")
         return False
 
     data = find_auto_product()
@@ -459,7 +484,7 @@ def publish_auto_product() -> bool:
     caption = build_caption(data, description)
     send_post(CHANNEL_USERNAME, {"image": data.get("image"), "caption": caption})
     mark_posted(data["product_id"])
-    logger.info(f"מוצר אוטומטי פורסם: {data['product_id']}")
+    logger.info(f"מוצר אוטומטי פורסם: {data['product_id']} ({data['tracking_id']})")
     return True
 
 
@@ -615,15 +640,15 @@ def autopost_cmd(message: types.Message):
     if not CHANNEL_USERNAME:
         bot.reply_to(message, "❌ לא הוגדר CHANNEL_USERNAME")
         return
-    if not ALI_TRACKING_ID:
-        bot.reply_to(message, "❌ לא הוגדר ALI_TRACKING_ID")
+    if not ALI_TRACKING_ID and not AUTO_CATEGORIES:
+        bot.reply_to(message, "❌ לא הוגדרו ALI_TRACKING_ID או AUTO_CATEGORIES")
         return
     bot.send_chat_action(message.chat.id, "typing")
     try:
         if publish_auto_product():
             bot.reply_to(message, "✅ מצאתי מוצר ופרסמתי לערוץ")
         else:
-            bot.reply_to(message, "😕 לא מצאתי מוצר מתאים. נסה שוב או שנה את AUTO_KEYWORDS")
+            bot.reply_to(message, "😕 לא מצאתי מוצר מתאים. נסה שוב או שנה את מילות החיפוש")
     except Exception as e:
         logger.error(f"autopost error: {e}", exc_info=True)
         bot.reply_to(message, f"❌ הפרסום נכשל: {e}")
