@@ -7,6 +7,7 @@ import logging
 import requests
 import urllib.parse
 import json
+import html
 import random
 
 from dotenv import load_dotenv
@@ -330,20 +331,25 @@ def format_price(data: Dict[str, Optional[str]]) -> str:
     return text
 
 
+def visible_len(html_text: str) -> int:
+    """אורך הטקסט כפי שטלגרם סופר אותו - בלי תגיות HTML ובלי כתובות קישורים."""
+    return len(html.unescape(re.sub(r"<[^>]+>", "", html_text)))
+
+
 def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
-    """בונה caption ומוודא שלא עולה על 1024 תווים."""
+    """בונה caption ומוודא שהטקסט הנראה לא עולה על 1024 תווים."""
     footer = (
         f"\n\n"
         f"💰 מחיר: {format_price(data)}\n"
         f"⭐ דירוג: {data.get('rating')}\n"
         f"🛒 הזמנות: {data.get('orders')}\n"
-        f"🔗 <a href=\"{data.get('link')}\">לרכישה כאן</a>"
+        f"🔗 <a href=\"{html.escape(str(data.get('link')), quote=True)}\">לרכישה כאן</a>"
     )
     header = f"<b>{HEADLINE}</b>\n\n"
-    max_desc_len = CAPTION_LIMIT - len(header) - len(footer) - 10  # 10 תווים buffer
+    max_desc_len = CAPTION_LIMIT - visible_len(header) - visible_len(footer) - 10  # buffer
     if len(description) > max_desc_len:
-        description = description[:max_desc_len].rstrip() + "..."
-    return header + description + footer
+        description = description[:max(max_desc_len, 0)].rstrip() + "..."
+    return header + html.escape(description, quote=False) + footer
 
 
 # --- תור פוסטים לפרסום אוטומטי ---
