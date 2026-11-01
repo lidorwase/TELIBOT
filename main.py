@@ -12,9 +12,11 @@ from dotenv import load_dotenv
 from telebot import TeleBot, types
 from telebot.types import Message
 from flask import Flask, request
-from threading import Thread
+from threading import Thread, Lock
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from openai import OpenAI
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 # --- הגדרות בסיס ---
 load_dotenv()
@@ -42,7 +44,23 @@ WEBHOOK_URL  = f"https://{os.getenv('RAILWAY_STATIC_URL')}{WEBHOOK_PATH}"
 
 CAPTION_LIMIT = 1024  # מגבלת Telegram לכיתוב תמונה
 
+# משפט פתיחה שמופיע בראש כל פוסט
+HEADLINE = "דילים ששווה לבדוק לא? 👀"
+
+# --- הגדרות פרסום אוטומטי ---
+# שעות פרסום (שעון ישראל), מופרדות בפסיק. למשל: "10:00,14:00,20:30"
+POST_TIMES = [
+    t.strip() for t in os.getenv("POST_TIMES", "10:00,14:00,20:00").split(",") if t.strip()
+]
+TIMEZONE   = ZoneInfo(os.getenv("TIMEZONE", "Asia/Jerusalem"))
+QUEUE_FILE = os.getenv("QUEUE_FILE", "queue.json")
+# מזהי טלגרם (מספרים) של מי שמורשה להוסיף פוסטים לתור. ריק = כולם.
+ADMIN_IDS = {
+    int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x
+}
+
 waiting_for_affiliate = {}
+queue_lock = Lock()
 
 # --- Webhook ---
 @app.route(WEBHOOK_PATH, methods=["POST"])
@@ -243,10 +261,81 @@ def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
         f"🛒 הזמנות: {data.get('orders')}\n"
         f"🔗 <a href=\"{data.get('link')}\">לרכישה כאן</a>"
     )
-    max_desc_len = CAPTION_LIMIT - len(footer) - 10  # 10 תווים buffer
+    header = f"<b>{HEADLINE}</b>\n\n"
+    max_desc_len = CAPTION_LIMIT - len(header) - len(footer) - 10  # 10 תווים buffer
     if len(description) > max_desc_len:
         description = description[:max_desc_len].rstrip() + "..."
-    return description + footer
+    return header + description + footer
+
+
+# --- תור פוסטים לפרסום אוטומטי ---
+def load_queue() -> List[Dict[str, Optional[str]]]:
+    try:
+        with open(QUEUE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        logger.error(f"שגיאה בקריאת התור: {e}")
+        return []
+
+
+def save_queue(queue: List[Dict[str, Optional[str]]]) -> None:
+    tmp = QUEUE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(queue, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, QUEUE_FILE)
+
+
+def enqueue_post(image: Optional[str], caption: str) -> int:
+    with queue_lock:
+        queue = load_queue()
+        queue.append({"image": image, "caption": caption})
+        save_queue(queue)
+        return len(queue)
+
+
+def send_post(chat_id, post: Dict[str, Optional[str]]) -> None:
+    if post.get("image"):
+        bot.send_photo(chat_id, post["image"], caption=post["caption"], parse_mode="HTML")
+    else:
+        bot.send_message(chat_id, post["caption"], parse_mode="HTML")
+
+
+def publish_next() -> bool:
+    """מפרסם לערוץ את הפוסט הבא בתור. מחזיר True אם פורסם."""
+    with queue_lock:
+        queue = load_queue()
+        if not queue:
+            logger.info("התור ריק - אין מה לפרסם")
+            return False
+        post = queue[0]
+        send_post(CHANNEL_USERNAME, post)  # אם נכשל - הפוסט נשאר בתור
+        queue.pop(0)
+        save_queue(queue)
+    logger.info(f"פוסט פורסם לערוץ {CHANNEL_USERNAME}. נשארו בתור: {len(queue)}")
+    return True
+
+
+def scheduler_loop() -> None:
+    """בודק כל 20 שניות אם הגיעה אחת משעות הפרסום."""
+    last_slot = None
+    logger.info(f"Scheduler פעיל. שעות פרסום: {', '.join(POST_TIMES)} ({TIMEZONE})")
+    while True:
+        try:
+            now = datetime.now(TIMEZONE)
+            hhmm = now.strftime("%H:%M")
+            slot = now.strftime("%Y-%m-%d ") + hhmm
+            if hhmm in POST_TIMES and slot != last_slot:
+                last_slot = slot
+                publish_next()
+        except Exception as e:
+            logger.error(f"שגיאה בפרסום מתוזמן: {e}", exc_info=True)
+        time.sleep(20)
+
+
+def is_admin(message: Message) -> bool:
+    return not ADMIN_IDS or message.from_user.id in ADMIN_IDS
 
 
 # --- Handler קישורים ---
@@ -303,22 +392,20 @@ def receive_affiliate_link(message):
         data["link"] = affiliate_link
 
         caption = build_caption(data, description)
+        post = {"image": data.get("image"), "caption": caption}
 
-        if data.get("image"):
-            bot.send_photo(
-                message.chat.id,
-                data["image"],
-                caption=caption,
-                parse_mode="HTML",
-            )
-        
-        else:
+        # תצוגה מקדימה למשתמש
+        send_post(message.chat.id, post)
+
+        # הוספה לתור הפרסום האוטומטי
+        if CHANNEL_USERNAME and is_admin(message):
+            position = enqueue_post(post["image"], caption)
             bot.send_message(
                 message.chat.id,
-                caption,
-                parse_mode="HTML"
+                f"🗓 הפוסט נוסף לתור (מקום {position}).\n"
+                f"יפורסם ב-{CHANNEL_USERNAME} בשעות: {', '.join(POST_TIMES)}",
             )
-        
+
     except Exception as e:
         logger.error(f"Affiliate handler error: {e}")
         bot.reply_to(message, "❌ שגיאה בהוספת קישור השותפים.")
@@ -329,8 +416,50 @@ def receive_affiliate_link(message):
 def start_cmd(message: types.Message):
     bot.reply_to(
         message,
-        "היי! שלח לי קישור למוצר מאלי אקספרס ואני אחזיר לך תיאור שיווקי מוכן לפרסום.",
+        "היי! שלח לי קישור למוצר מאלי אקספרס ואני אחזיר לך תיאור שיווקי מוכן לפרסום.\n\n"
+        "הפוסטים נכנסים לתור ומתפרסמים אוטומטית בערוץ בשעות הקבועות.\n"
+        "/queue - כמה פוסטים בתור\n"
+        "/postnow - לפרסם עכשיו את הפוסט הבא\n"
+        "/clearqueue - לרוקן את התור",
     )
+
+
+# --- ניהול התור ---
+@bot.message_handler(commands=["queue"])
+def queue_cmd(message: types.Message):
+    if not is_admin(message):
+        return
+    count = len(load_queue())
+    bot.reply_to(
+        message,
+        f"📋 בתור: {count} פוסטים\n⏰ שעות פרסום: {', '.join(POST_TIMES)}",
+    )
+
+
+@bot.message_handler(commands=["postnow"])
+def postnow_cmd(message: types.Message):
+    if not is_admin(message):
+        return
+    if not CHANNEL_USERNAME:
+        bot.reply_to(message, "❌ לא הוגדר CHANNEL_USERNAME")
+        return
+    try:
+        if publish_next():
+            bot.reply_to(message, "✅ פורסם לערוץ")
+        else:
+            bot.reply_to(message, "התור ריק")
+    except Exception as e:
+        logger.error(f"postnow error: {e}", exc_info=True)
+        bot.reply_to(message, f"❌ הפרסום נכשל: {e}")
+
+
+@bot.message_handler(commands=["clearqueue"])
+def clearqueue_cmd(message: types.Message):
+    if not is_admin(message):
+        return
+    with queue_lock:
+        save_queue([])
+    bot.reply_to(message, "🗑 התור רוקן")
 
 
 # --- הרצה ---
@@ -338,6 +467,11 @@ def main():
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL)
     logger.info(f"Bot is live! Webhook: {WEBHOOK_URL}")
+
+    if CHANNEL_USERNAME:
+        Thread(target=scheduler_loop, daemon=True).start()
+    else:
+        logger.warning("CHANNEL_USERNAME לא מוגדר - פרסום אוטומטי כבוי")
 
     app.run(
         host="0.0.0.0",
