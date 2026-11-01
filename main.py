@@ -7,6 +7,7 @@ import logging
 import requests
 import urllib.parse
 import json
+import random
 
 from dotenv import load_dotenv
 from telebot import TeleBot, types
@@ -58,6 +59,22 @@ QUEUE_FILE = os.getenv("QUEUE_FILE", "queue.json")
 ADMIN_IDS = {
     int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x
 }
+
+# --- הגדרות מציאת מוצרים אוטומטית מה-API ---
+# כשהתור ריק בשעת פרסום, הבוט מחפש לבד מוצר פופולרי ומפרסם אותו.
+ALI_TRACKING_ID = os.getenv("ALI_TRACKING_ID")  # נדרש כדי שהקישורים יהיו קישורי שותפים
+AUTO_FIND = os.getenv("AUTO_FIND", "true").lower() in ("1", "true", "yes", "on")
+# מילות חיפוש (באנגלית עובד הכי טוב), מופרדות בפסיק. בכל פעם נבחרת אחת אקראית.
+AUTO_KEYWORDS = [
+    k.strip() for k in os.getenv(
+        "AUTO_KEYWORDS",
+        "gadgets,kitchen,home organization,phone accessories,car accessories,smart home,camping",
+    ).split(",") if k.strip()
+]
+AUTO_MIN_RATING = float(os.getenv("AUTO_MIN_RATING", "90"))   # דירוג מינימלי באחוזים
+AUTO_MIN_ORDERS = int(os.getenv("AUTO_MIN_ORDERS", "100"))     # מינימום הזמנות
+AUTO_MAX_PRICE  = os.getenv("AUTO_MAX_PRICE")                  # מחיר מקסימלי ב-₪ (לא חובה)
+POSTED_FILE     = os.getenv("POSTED_FILE", "posted.json")      # מוצרים שכבר פורסמו (למניעת כפילויות)
 
 waiting_for_affiliate = {}
 queue_lock = Lock()
@@ -317,6 +334,143 @@ def publish_next() -> bool:
     return True
 
 
+# --- מציאת מוצרים אוטומטית ---
+def load_posted() -> List[str]:
+    try:
+        with open(POSTED_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        logger.error(f"שגיאה בקריאת {POSTED_FILE}: {e}")
+        return []
+
+
+def mark_posted(product_id: str) -> None:
+    posted = load_posted()
+    posted.append(product_id)
+    tmp = POSTED_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(posted[-1000:], f)  # שומר את 1000 האחרונים
+    os.replace(tmp, POSTED_FILE)
+
+
+def parse_percent(value) -> float:
+    try:
+        return float(str(value).replace("%", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def ali_hotproducts(keyword: str, page: int) -> List[Dict]:
+    """מחפש מוצרים פופולריים ב-AliExpress לפי מילת חיפוש."""
+    params: Dict[str, str] = {
+        "app_key": ALI_APP_KEY,
+        "method": "aliexpress.affiliate.hotproduct.query",
+        "sign_method": "sha256",
+        "timestamp": str(int(time.time() * 1000)),
+        "keywords": keyword,
+        "page_no": str(page),
+        "page_size": "50",
+        "sort": "LAST_VOLUME_DESC",
+        "target_currency": "ILS",
+        "target_language": "HE",
+        "ship_to_country": "IL",
+        "tracking_id": ALI_TRACKING_ID,
+    }
+    if AUTO_MAX_PRICE:
+        params["max_sale_price"] = str(int(float(AUTO_MAX_PRICE) * 100))  # ב-API המחיר באגורות
+    params["sign"] = ali_sign(params, ALI_APP_SECRET)
+
+    res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
+    res.raise_for_status()
+    data = res.json()
+
+    if "error_response" in data:
+        logger.error(f"AliExpress hotproduct error: {data['error_response']}")
+        return []
+
+    container = (
+        data.get("aliexpress_affiliate_hotproduct_query_response", {})
+            .get("resp_result", {})
+            .get("result", {})
+            .get("products")
+    )
+    if isinstance(container, dict):
+        container = container.get("product")
+    return container if isinstance(container, list) else []
+
+
+def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
+    """מוצא מוצר טוב שעוד לא פורסם ומחזיר אותו בפורמט של build_caption."""
+    posted = set(load_posted())
+    keywords = AUTO_KEYWORDS[:]
+    random.shuffle(keywords)
+
+    for keyword in keywords[:3]:  # עד 3 ניסיונות עם מילים שונות
+        try:
+            products = ali_hotproducts(keyword, page=random.randint(1, 3))
+        except Exception as e:
+            logger.error(f"שגיאה בחיפוש '{keyword}': {e}")
+            continue
+
+        candidates = []
+        for p in products:
+            pid = str(p.get("product_id") or "")
+            orders = int(p.get("lastest_volume") or 0)
+            link = p.get("promotion_link")
+            if (
+                pid and link
+                and pid not in posted
+                and parse_percent(p.get("evaluate_rate")) >= AUTO_MIN_RATING
+                and orders >= AUTO_MIN_ORDERS
+            ):
+                candidates.append(p)
+
+        logger.info(f"חיפוש '{keyword}': {len(products)} מוצרים, {len(candidates)} מתאימים")
+        if not candidates:
+            continue
+
+        p = random.choice(candidates[:15])  # אקראי מתוך הנמכרים ביותר
+        return {
+            "product_id": str(p.get("product_id")),
+            "title": p.get("product_title"),
+            "image": p.get("product_main_image_url"),
+            "rating": p.get("evaluate_rate"),
+            "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
+            "orders": p.get("lastest_volume"),
+            "link": p.get("promotion_link"),
+        }
+    return None
+
+
+def publish_auto_product() -> bool:
+    """מוצא מוצר, כותב לו תיאור ומפרסם לערוץ. מחזיר True אם פורסם."""
+    if not ALI_TRACKING_ID:
+        logger.warning("ALI_TRACKING_ID לא מוגדר - לא ניתן למצוא מוצרים אוטומטית")
+        return False
+
+    data = find_auto_product()
+    if not data:
+        logger.warning("לא נמצא מוצר מתאים לפרסום אוטומטי")
+        return False
+
+    description = generate_description(data) or data.get("title") or "מוצר מומלץ!"
+    caption = build_caption(data, description)
+    send_post(CHANNEL_USERNAME, {"image": data.get("image"), "caption": caption})
+    mark_posted(data["product_id"])
+    logger.info(f"מוצר אוטומטי פורסם: {data['product_id']}")
+    return True
+
+
+def publish_scheduled() -> None:
+    """בשעת פרסום: קודם פוסטים מהתור, ואם התור ריק - מוצר שהבוט מצא לבד."""
+    if publish_next():
+        return
+    if AUTO_FIND:
+        publish_auto_product()
+
+
 def scheduler_loop() -> None:
     """בודק כל 20 שניות אם הגיעה אחת משעות הפרסום."""
     last_slot = None
@@ -328,7 +482,7 @@ def scheduler_loop() -> None:
             slot = now.strftime("%Y-%m-%d ") + hhmm
             if hhmm in POST_TIMES and slot != last_slot:
                 last_slot = slot
-                publish_next()
+                publish_scheduled()
         except Exception as e:
             logger.error(f"שגיאה בפרסום מתוזמן: {e}", exc_info=True)
         time.sleep(20)
@@ -420,7 +574,8 @@ def start_cmd(message: types.Message):
         "הפוסטים נכנסים לתור ומתפרסמים אוטומטית בערוץ בשעות הקבועות.\n"
         "/queue - כמה פוסטים בתור\n"
         "/postnow - לפרסם עכשיו את הפוסט הבא\n"
-        "/clearqueue - לרוקן את התור",
+        "/clearqueue - לרוקן את התור\n"
+        "/autopost - למצוא מוצר לבד ולפרסם אותו עכשיו",
     )
 
 
@@ -450,6 +605,27 @@ def postnow_cmd(message: types.Message):
             bot.reply_to(message, "התור ריק")
     except Exception as e:
         logger.error(f"postnow error: {e}", exc_info=True)
+        bot.reply_to(message, f"❌ הפרסום נכשל: {e}")
+
+
+@bot.message_handler(commands=["autopost"])
+def autopost_cmd(message: types.Message):
+    if not is_admin(message):
+        return
+    if not CHANNEL_USERNAME:
+        bot.reply_to(message, "❌ לא הוגדר CHANNEL_USERNAME")
+        return
+    if not ALI_TRACKING_ID:
+        bot.reply_to(message, "❌ לא הוגדר ALI_TRACKING_ID")
+        return
+    bot.send_chat_action(message.chat.id, "typing")
+    try:
+        if publish_auto_product():
+            bot.reply_to(message, "✅ מצאתי מוצר ופרסמתי לערוץ")
+        else:
+            bot.reply_to(message, "😕 לא מצאתי מוצר מתאים. נסה שוב או שנה את AUTO_KEYWORDS")
+    except Exception as e:
+        logger.error(f"autopost error: {e}", exc_info=True)
         bot.reply_to(message, f"❌ הפרסום נכשל: {e}")
 
 
