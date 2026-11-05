@@ -288,6 +288,15 @@ def pull_product(url: str):
 
 
 # --- יצירת תיאור שיווקי ---
+def clean_repetitions(text: str) -> str:
+    """מוחק מילה או צירוף שחוזרים ברצף (למשל "רפורמה רפורמה רפורמה")."""
+    # צירופים של 1-4 מילים שחוזרים פעמיים ומעלה ברצף -> פעם אחת
+    for n in (4, 3, 2, 1):
+        pattern = r"((?:\S+\s+){%d})\1+" % n
+        text = re.sub(pattern, r"\1", text + " ").strip()
+    return text
+
+
 def generate_description(data: Dict[str, Optional[str]]) -> Optional[str]:
     try:
         price, original, saving, percent = price_info(data)
@@ -314,9 +323,10 @@ def generate_description(data: Dict[str, Optional[str]]) -> Optional[str]:
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
+            frequency_penalty=0.8,  # מונע חזרה על אותה מילה שוב ושוב
             max_tokens=200,  # קצר כדי לא לחרוג ממגבלת caption
         )
-        text = (response.choices[0].message.content or "").strip()
+        text = clean_repetitions((response.choices[0].message.content or "").strip())
         logger.info(f"תיאור מ-OpenAI ({len(text)} תווים): {text[:80]!r}")
         return text or None
     except Exception as e:
