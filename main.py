@@ -850,6 +850,21 @@ def start_cmd(message: types.Message):
     )
 
 
+# --- /myid ---
+@bot.message_handler(commands=["myid"])
+def myid_cmd(message: types.Message):
+    user_id = message.from_user.id
+    status = "✅ אתה מוגדר כמנהל." if user_id in ADMIN_IDS else (
+        "⚠️ עדיין לא מוגדר כמנהל." if ADMIN_IDS else "ℹ️ ADMIN_IDS עדיין לא מוגדר ב-Railway."
+    )
+    bot.reply_to(
+        message,
+        f"🆔 המזהה שלך: <code>{user_id}</code>\n\n"
+        f"{status}\n"
+        "כדי לקבל את חבילת הטיקטוק, שים את המספר הזה ב-Railway במשתנה ADMIN_IDS.",
+    )
+
+
 # --- ניהול התור ---
 @bot.message_handler(commands=["queue"])
 def queue_cmd(message: types.Message):
