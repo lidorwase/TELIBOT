@@ -123,6 +123,14 @@ AUTO_MIN_ORDERS = int(os.getenv("AUTO_MIN_ORDERS", "100"))     # מינימום 
 AUTO_MAX_PRICE  = os.getenv("AUTO_MAX_PRICE")                  # מחיר מקסימלי ב-₪ (לא חובה)
 POSTED_FILE     = os.getenv("POSTED_FILE", "posted.json")      # מוצרים שכבר פורסמו (למניעת כפילויות)
 
+# --- חבילת טיקטוק ---
+# אחרי כל פרסום בערוץ, הבוט שולח בפרטי תמונות/סרטון + תסריט וכיתוב מוכנים לטיקטוק.
+TIKTOK_PACK = os.getenv("TIKTOK_PACK", "true").lower() in ("1", "true", "yes", "on")
+# לאן לשלוח: מזהי טלגרם מופרדים בפסיק. ברירת מחדל: ADMIN_IDS
+TIKTOK_CHAT_IDS = {
+    int(x) for x in os.getenv("TIKTOK_CHAT_ID", "").replace(" ", "").split(",") if x
+} or ADMIN_IDS
+
 waiting_for_affiliate = {}
 queue_lock = Lock()
 
@@ -190,6 +198,22 @@ def ali_sign(params: Dict[str, str], app_secret: str) -> str:
     return hmac.new(
         app_secret.encode(), joined.encode(), hashlib.sha256
     ).hexdigest().upper()
+
+
+def product_images(p: Dict) -> List[str]:
+    """כל תמונות המוצר מה-API: התמונה הראשית ואחריה התמונות הנוספות."""
+    images = [p.get("product_main_image_url")]
+    extra = p.get("product_small_image_urls")
+    if isinstance(extra, dict):
+        extra = extra.get("string")
+    if isinstance(extra, list):
+        images.extend(extra)
+    seen, result = set(), []
+    for url in images:
+        if url and url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result
 
 
 def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
@@ -273,6 +297,8 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
     return {
         "title": p.get("product_title"),
         "image": p.get("product_main_image_url"),
+        "images": product_images(p),
+        "video": p.get("product_video_url"),
         "rating": p.get("evaluate_rate"),
         "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
         "original_price": p.get("target_original_price"),
@@ -422,10 +448,10 @@ def save_queue(queue: List[Dict[str, Optional[str]]]) -> None:
     os.replace(tmp, QUEUE_FILE)
 
 
-def enqueue_post(image: Optional[str], caption: str) -> int:
+def enqueue_post(image: Optional[str], caption: str, data: Optional[Dict] = None) -> int:
     with queue_lock:
         queue = load_queue()
-        queue.append({"image": image, "caption": caption})
+        queue.append({"image": image, "caption": caption, "data": data})
         save_queue(queue)
         return len(queue)
 
@@ -449,6 +475,8 @@ def publish_next() -> bool:
         queue.pop(0)
         save_queue(queue)
     logger.info(f"פוסט פורסם לערוץ {CHANNEL_USERNAME}. נשארו בתור: {len(queue)}")
+    if post.get("data"):
+        send_tiktok_pack(post["data"])
     return True
 
 
@@ -590,6 +618,8 @@ def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
             "product_id": str(p.get("product_id")),
             "title": p.get("product_title"),
             "image": p.get("product_main_image_url"),
+            "images": product_images(p),
+            "video": p.get("product_video_url"),
             "rating": p.get("evaluate_rate"),
             "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
             "original_price": p.get("target_original_price"),
@@ -617,7 +647,90 @@ def publish_auto_product() -> bool:
     send_post(CHANNEL_USERNAME, {"image": data.get("image"), "caption": caption})
     mark_posted(data["product_id"])
     logger.info(f"מוצר אוטומטי פורסם: {data['product_id']} ({data['tracking_id']})")
+    send_tiktok_pack(data)
     return True
+
+
+# --- חבילת טיקטוק ---
+def channel_link() -> str:
+    name = (CHANNEL_USERNAME or "").lstrip("@")
+    return f"t.me/{name}" if name and not name.lstrip("-").isdigit() else "הערוץ שלי בטלגרם"
+
+
+def generate_tiktok_script(data: Dict) -> Optional[str]:
+    """כותב תסריט, טקסטים למסך, כיתוב והאשטגים לסרטון טיקטוק על המוצר."""
+    price, original, saving, percent = price_info(data)
+    deal = (
+        f"מחיר רגיל {original:.0f} ₪, עכשיו {price:.0f} ₪ ({percent}% הנחה)"
+        if original else f"מחיר: {data.get('price')} ₪"
+    )
+    prompt = (
+        "אתה יוצר תוכן ויראלי לטיקטוק בעברית, בערוץ דילים מאלי אקספרס. "
+        "כתוב חבילה לסרטון קצר (15-25 שניות) על המוצר הבא. "
+        "המטרה: שהצופים ייכנסו לערוץ הטלגרם כדי לקבל את הקישור. "
+        "אל תכתוב קישור למוצר - הקישור נמצא רק בטלגרם.\n\n"
+        f"מוצר: {data.get('title')}\n{deal}\n"
+        f"דירוג: {data.get('rating')}, הזמנות: {data.get('orders')}\n\n"
+        "כתוב בדיוק במבנה הזה, בלי markdown ובלי כוכביות:\n"
+        "🎣 הוק (2 שניות ראשונות):\n<משפט פתיחה שעוצר גלילה>\n\n"
+        "🎬 תסריט:\n<3-5 שורות קצרות - מה אומרים או מראים, שורה לכל קטע>\n\n"
+        "📱 טקסטים למסך:\n<3-4 טקסטים קצרים, אחד בכל שורה. "
+        "האחרון: 'הקישור בטלגרם - בביו 👆'>\n\n"
+        "✍️ כיתוב לפוסט:\n<1-2 משפטים + קריאה להיכנס לטלגרם בביו>\n\n"
+        "#️⃣ האשטגים:\n<8-10 האשטגים בעברית ובאנגלית>\n\n"
+        "📌 תגובה נעוצה:\n<משפט קצר שמפנה לטלגרם בביו>\n\n"
+        "🔎 מילת חיפוש בערוץ:\n<מילה או שתיים בעברית שמתארות את המוצר>"
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.8,
+            frequency_penalty=0.5,
+            max_tokens=700,
+        )
+        text = clean_repetitions((response.choices[0].message.content or "").strip())
+        return text or None
+    except Exception as e:
+        logger.error(f"OpenAI error (tiktok): {e}")
+        return None
+
+
+def send_tiktok_pack(data: Dict) -> None:
+    """שולח בפרטי תמונות/סרטון של המוצר + תסריט מוכן לטיקטוק. לא מפיל את הפרסום אם נכשל."""
+    if not TIKTOK_PACK:
+        return
+    if not TIKTOK_CHAT_IDS:
+        logger.warning("חבילת טיקטוק: לא הוגדרו ADMIN_IDS או TIKTOK_CHAT_ID - לא יודע למי לשלוח")
+        return
+    try:
+        script = generate_tiktok_script(data)
+        images = (data.get("images") or [data.get("image")])[:10]
+        images = [u for u in images if u]
+        title = (data.get("title") or "")[:200]
+
+        for chat_id in TIKTOK_CHAT_IDS:
+            try:
+                bot.send_message(chat_id, f"🎵 חבילת טיקטוק למוצר שפורסם עכשיו:\n{title}", parse_mode=None)
+                if data.get("video"):
+                    try:
+                        bot.send_video(chat_id, data["video"], caption="🎬 סרטון המוצר")
+                    except Exception:
+                        bot.send_message(chat_id, f"🎬 סרטון המוצר: {data['video']}", parse_mode=None)
+                if len(images) > 1:
+                    bot.send_media_group(chat_id, [types.InputMediaPhoto(u) for u in images])
+                elif images:
+                    bot.send_photo(chat_id, images[0])
+                if script:
+                    bot.send_message(
+                        chat_id,
+                        f"{script}\n\n🔗 בביו: {channel_link()}",
+                        parse_mode=None,
+                    )
+            except Exception as e:
+                logger.error(f"שליחת חבילת טיקטוק ל-{chat_id} נכשלה: {e}")
+    except Exception as e:
+        logger.error(f"חבילת טיקטוק נכשלה: {e}", exc_info=True)
 
 
 def publish_scheduled() -> None:
@@ -710,7 +823,7 @@ def receive_affiliate_link(message):
 
         # הוספה לתור הפרסום האוטומטי
         if CHANNEL_USERNAME and is_admin(message):
-            position = enqueue_post(post["image"], caption)
+            position = enqueue_post(post["image"], caption, data)
             bot.send_message(
                 message.chat.id,
                 f"🗓 הפוסט נוסף לתור (מקום {position}).\n"
@@ -732,7 +845,8 @@ def start_cmd(message: types.Message):
         "/queue - כמה פוסטים בתור\n"
         "/postnow - לפרסם עכשיו את הפוסט הבא\n"
         "/clearqueue - לרוקן את התור\n"
-        "/autopost - למצוא מוצר לבד ולפרסם אותו עכשיו",
+        "/autopost - למצוא מוצר לבד ולפרסם אותו עכשיו\n\n"
+        "🎵 אחרי כל פרסום בערוץ תקבל כאן חבילת טיקטוק: תמונות + תסריט וכיתוב מוכנים.",
     )
 
 
