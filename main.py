@@ -49,6 +49,14 @@ CAPTION_LIMIT = 1024  # מגבלת Telegram לכיתוב תמונה
 # משפט פתיחה שמופיע בראש כל פוסט
 HEADLINE = "דילים ששווה לבדוק לא? 👀"
 
+# שורה לקונים חדשים מתחת למחיר. אפשר לשנות דרך NEW_BUYER_LINE, או לכבות עם NEW_BUYER_LINE=off
+NEW_BUYER_LINE = os.getenv(
+    "NEW_BUYER_LINE",
+    "💡 קונים חדשים ב-AliExpress? המחיר שלכם עשוי להיות עוד יותר נמוך!",
+).strip()
+if NEW_BUYER_LINE.lower() in ("off", "false", "0", "no"):
+    NEW_BUYER_LINE = ""
+
 # --- הגדרות פרסום אוטומטי ---
 # שעות פרסום (שעון ישראל), מופרדות בפסיק. למשל: "10:00,14:00,20:30"
 POST_TIMES = [
@@ -382,7 +390,8 @@ def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
     footer = (
         f"\n\n"
         f"{format_price(data)}\n"
-        f"⭐ דירוג: {data.get('rating')}\n"
+        + (f"{html.escape(NEW_BUYER_LINE, quote=False)}\n" if NEW_BUYER_LINE else "")
+        + f"⭐ דירוג: {data.get('rating')}\n"
         f"🛒 הזמנות: {data.get('orders')}\n"
         f"🔗 <a href=\"{html.escape(str(data.get('link')), quote=True)}\">לרכישה כאן</a>"
     )
