@@ -41,7 +41,9 @@ bot    = TeleBot(BOT_TOKEN, parse_mode="HTML")
 app    = Flask(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-WEBHOOK_PATH = f"/{BOT_TOKEN}"
+# כתובת ה-Webhook נגזרת מהטוקן (hash) כדי שהטוקן עצמו לא יופיע בלוגים
+WEBHOOK_SECRET = hashlib.sha256(BOT_TOKEN.encode()).hexdigest()
+WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET[:32]}"
 WEBHOOK_URL  = f"https://{os.getenv('RAILWAY_STATIC_URL')}{WEBHOOK_PATH}"
 
 CAPTION_LIMIT = 1024  # מגבלת Telegram לכיתוב תמונה
@@ -137,6 +139,9 @@ queue_lock = Lock()
 # --- Webhook ---
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
+    # טלגרם שולח את הסוד בכותרת - דוחים בקשות שלא הגיעו מטלגרם
+    if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+        return "Forbidden", 403
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data().decode("utf-8")
         update = types.Update.de_json(json_string)
@@ -930,8 +935,8 @@ def clearqueue_cmd(message: types.Message):
 # --- הרצה ---
 def main():
     bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    logger.info("Bot is live! Webhook: " + WEBHOOK_URL.replace(BOT_TOKEN, "***"))
+    bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
+    logger.info(f"Bot is live! Webhook: {WEBHOOK_URL}")
     logger.info(f"Auto-find: {'on' if AUTO_FIND else 'off'} | {auto_config_status()}")
 
     if CHANNEL_USERNAME:
