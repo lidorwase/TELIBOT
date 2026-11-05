@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 SLIDE_SECONDS = 2.6
+CTA_SECONDS = 3.6   # השקופית האחרונה (קריאה לפעולה) ארוכה יותר כדי שיספיקו לקרוא
 ZOOM = 0.10  # כמה התמונה מתקרבת לאורך כל שקופית
 MAX_SLIDES = 5
 
@@ -29,6 +30,8 @@ FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "H
 WHITE = (255, 255, 255)
 YELLOW = (255, 214, 0)
 GRAY = (200, 200, 200)
+COLORS = {"white": WHITE, "yellow": YELLOW, "gray": GRAY}
+DEFAULT_CTA = [("הקישור בטלגרם", 70, "white"), ("בביו", 84, "yellow")]
 
 HOOKS = [
     "לא תאמינו כמה זה עולה",
@@ -137,7 +140,7 @@ def _fmt(value: float) -> str:
     return f"{value:.0f}" if value >= 100 or value == int(value) else f"{value:.2f}"
 
 
-def build_slides_text(data: Dict, price_info) -> List[List[Line]]:
+def build_slides_text(data: Dict, price_info, cta_lines=None) -> List[List[Line]]:
     """הטקסטים לכל שקופית: הוק, מחיר, הוכחה חברתית, קריאה לפעולה."""
     slides: List[List[Line]] = [[(random.choice(HOOKS), 64, WHITE)]]
 
@@ -167,11 +170,11 @@ def build_slides_text(data: Dict, price_info) -> List[List[Line]]:
     if social:
         slides.append(social)
 
-    slides.append([("הקישור בטלגרם", 70, WHITE), ("בביו", 84, YELLOW)])
+    slides.append([(t, size, COLORS.get(c, WHITE)) for t, size, c in (cta_lines or DEFAULT_CTA)])
     return slides
 
 
-def make_tiktok_video(data: Dict, price_info) -> Optional[str]:
+def make_tiktok_video(data: Dict, price_info, cta_lines=None) -> Optional[str]:
     """יוצר קובץ MP4 אנכי ומחזיר את הנתיב שלו (או None אם נכשל). האחריות למחוק את הקובץ - על הקורא."""
     urls = [u for u in (data.get("images") or [data.get("image")]) if u][:MAX_SLIDES]
     images = [img for img in (_download(u) for u in urls) if img]
@@ -179,7 +182,7 @@ def make_tiktok_video(data: Dict, price_info) -> Optional[str]:
         logger.warning("סרטון: אין תמונות זמינות")
         return None
 
-    texts = build_slides_text(data, price_info)
+    texts = build_slides_text(data, price_info, cta_lines)
     slide_count = min(max(len(texts), min(len(images), MAX_SLIDES)), MAX_SLIDES)
     # הוק ראשון, קריאה לפעולה אחרונה, שקופיות בלי טקסט באמצע אם יש יותר תמונות
     middle = texts[1:-1] + [[]] * (slide_count - len(texts))
@@ -198,6 +201,8 @@ def make_tiktok_video(data: Dict, price_info) -> Optional[str]:
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         for i, lines in enumerate(slide_texts):
+            if i == len(slide_texts) - 1:
+                frames_per_slide = int(CTA_SECONDS * FPS)
             img = images[i % len(images)]
             bg = _background(img)
             overlay = _text_overlay(lines)

@@ -132,6 +132,12 @@ TIKTOK_PACK = os.getenv("TIKTOK_PACK", "true").lower() in ("1", "true", "yes", "
 TIKTOK_CHAT_IDS = {
     int(x) for x in os.getenv("TIKTOK_CHAT_ID", "").replace(" ", "").split(",") if x
 } or ADMIN_IDS
+# איך מפנים מטיקטוק לטלגרם (כל עוד אין קישור לחיץ בביו):
+#   dm     - "כתבו 'קישור' בתגובות ואשלח לכם בפרטי" + שם הערוץ לחיפוש (ברירת מחדל)
+#   search - "חפשו בטלגרם: @שם_הערוץ"
+#   bio    - "הקישור בטלגרם - בביו" (אחרי שיש קישור לחיץ בביו)
+TIKTOK_CTA_MODE = os.getenv("TIKTOK_CTA_MODE", "dm").strip().lower()
+TIKTOK_DM_KEYWORD = os.getenv("TIKTOK_DM_KEYWORD", "קישור").strip() or "קישור"
 # סרטון אנכי שהבוט מייצר מתמונות המוצר (בתוך חבילת הטיקטוק)
 TIKTOK_VIDEO = os.getenv("TIKTOK_VIDEO", "true").lower() in ("1", "true", "yes", "on")
 
@@ -698,6 +704,56 @@ def publish_auto_product() -> bool:
 
 
 # --- חבילת טיקטוק ---
+def channel_handle() -> Optional[str]:
+    """@שם_הערוץ לחיפוש בטלגרם, או None לערוץ פרטי."""
+    name = (CHANNEL_USERNAME or "").lstrip("@")
+    return f"@{name}" if name and not name.lstrip("-").isdigit() else None
+
+
+def tiktok_cta() -> Dict:
+    """הקריאה לפעולה לסרטון ולתסריט, לפי TIKTOK_CTA_MODE."""
+    handle = channel_handle()
+    kw = TIKTOK_DM_KEYWORD
+    mode = TIKTOK_CTA_MODE
+    if mode == "search" and not handle:
+        mode = "bio"  # אין שם ציבורי לחפש
+
+    if mode == "dm":
+        video = [(f'כתבו "{kw}" בתגובות', 56, "white"), ("ואשלח לכם בפרטי", 56, "white")]
+        if handle:
+            video += [("או חפשו בטלגרם:", 42, "gray"), (handle, 64, "yellow")]
+        search = f" | או חפשו בטלגרם: {handle}" if handle else ""
+        return {
+            "video": video,
+            "screen": f"כתבו '{kw}' בתגובות ואשלח לכם בפרטי 📩",
+            "caption": f"קריאה לכתוב '{kw}' בתגובות כדי לקבל את הקישור בפרטי"
+                       + (f", או לחפש בטלגרם {handle}" if handle else ""),
+            "pinned": f"כתבו '{kw}' ואשלח לכם את הקישור בפרטי 📩{search}",
+        }
+    if mode == "search":
+        return {
+            "video": [("חפשו בטלגרם:", 60, "white"), (handle, 76, "yellow"), ("הקישור מחכה שם", 46, "gray")],
+            "screen": f"חפשו בטלגרם: {handle} 🔎",
+            "caption": f"קריאה לחפש בטלגרם את הערוץ {handle} כדי לקבל את הקישור",
+            "pinned": f"הקישור מחכה בערוץ הטלגרם 👉 חפשו: {handle}",
+        }
+    return {
+        "video": None,  # ברירת המחדל של הסרטון: "הקישור בטלגרם / בביו"
+        "screen": "הקישור בטלגרם - בביו 👆",
+        "caption": "קריאה להיכנס לטלגרם דרך הקישור בביו",
+        "pinned": "הקישור בערוץ הטלגרם - בביו 🔗",
+    }
+
+
+def tiktok_dm_link() -> str:
+    """הקישור לשלוח בפרטי: קישור ה-TikTok מ-/links אם נוצר, אחרת הקישור הציבורי לערוץ."""
+    links = load_json_file(LINKS_FILE, {})
+    for source, url in links.items():
+        if source.lower() == "tiktok":
+            return url
+    return public_channel_url() or channel_link()
+
+
 def channel_link() -> str:
     name = (CHANNEL_USERNAME or "").lstrip("@")
     return f"t.me/{name}" if name and not name.lstrip("-").isdigit() else "הערוץ שלי בטלגרם"
@@ -710,6 +766,7 @@ def generate_tiktok_script(data: Dict) -> Optional[str]:
         f"מחיר רגיל {original:.0f} ₪, עכשיו {price:.0f} ₪ ({percent}% הנחה)"
         if original else f"מחיר: {data.get('price')} ₪"
     )
+    cta = tiktok_cta()
     prompt = (
         "אתה יוצר תוכן ויראלי לטיקטוק בעברית, בערוץ דילים מאלי אקספרס. "
         "כתוב חבילה לסרטון קצר (15-25 שניות) על המוצר הבא. "
@@ -721,10 +778,10 @@ def generate_tiktok_script(data: Dict) -> Optional[str]:
         "🎣 הוק (2 שניות ראשונות):\n<משפט פתיחה שעוצר גלילה>\n\n"
         "🎬 תסריט:\n<3-5 שורות קצרות - מה אומרים או מראים, שורה לכל קטע>\n\n"
         "📱 טקסטים למסך:\n<3-4 טקסטים קצרים, אחד בכל שורה. "
-        "האחרון: 'הקישור בטלגרם - בביו 👆'>\n\n"
-        "✍️ כיתוב לפוסט:\n<1-2 משפטים + קריאה להיכנס לטלגרם בביו>\n\n"
+        f"האחרון בדיוק: '{cta['screen']}'>\n\n"
+        f"✍️ כיתוב לפוסט:\n<1-2 משפטים + {cta['caption']}>\n\n"
         "#️⃣ האשטגים:\n<8-10 האשטגים בעברית ובאנגלית>\n\n"
-        "📌 תגובה נעוצה:\n<משפט קצר שמפנה לטלגרם בביו>\n\n"
+        f"📌 תגובה נעוצה:\n{cta['pinned']}\n\n"
         "🔎 מילת חיפוש בערוץ:\n<מילה או שתיים בעברית שמתארות את המוצר>"
     )
     try:
@@ -742,6 +799,18 @@ def generate_tiktok_script(data: Dict) -> Optional[str]:
         return None
 
 
+def tiktok_footer() -> str:
+    handle = channel_handle()
+    if TIKTOK_CTA_MODE == "dm":
+        lines = [f"💬 למי שכותב '{TIKTOK_DM_KEYWORD}' בתגובות - העתק ושלח לו בפרטי את ההודעה הבאה 👇"]
+        if handle:
+            lines.append(f"📣 בביו כתוב כטקסט: כל הקישורים בטלגרם ← חפשו {handle}")
+        return "\n".join(lines)
+    if TIKTOK_CTA_MODE == "search":
+        return f"📣 בביו כתוב כטקסט: כל הקישורים בטלגרם ← חפשו {handle}"
+    return f"🔗 בביו: {tiktok_dm_link()}"
+
+
 def send_tiktok_pack(data: Dict) -> None:
     """שולח בפרטי תמונות/סרטון של המוצר + תסריט מוכן לטיקטוק. לא מפיל את הפרסום אם נכשל."""
     if not TIKTOK_PACK:
@@ -755,7 +824,7 @@ def send_tiktok_pack(data: Dict) -> None:
         if TIKTOK_VIDEO:
             try:
                 from video import make_tiktok_video
-                video_path = make_tiktok_video(data, price_info)
+                video_path = make_tiktok_video(data, price_info, tiktok_cta()["video"])
             except Exception as e:
                 logger.error(f"יצירת סרטון טיקטוק נכשלה: {e}", exc_info=True)
         images = (data.get("images") or [data.get("image")])[:10]
@@ -781,10 +850,15 @@ def send_tiktok_pack(data: Dict) -> None:
                 elif images:
                     bot.send_photo(chat_id, images[0])
                 if script:
+                    bot.send_message(chat_id, f"{script}\n\n{tiktok_footer()}", parse_mode=None)
+                if TIKTOK_CTA_MODE == "dm":
+                    # הודעה נפרדת - קל להעתיק ולהדביק בפרטי למי שכתב בתגובות
                     bot.send_message(
                         chat_id,
-                        f"{script}\n\n🔗 בביו: {channel_link()}",
+                        "היי! 🙌 הנה הקישור לערוץ הדילים שלי בטלגרם, "
+                        f"המוצר מהסרטון מחכה שם: {tiktok_dm_link()}",
                         parse_mode=None,
+                        disable_web_page_preview=True,
                     )
             except Exception as e:
                 logger.error(f"שליחת חבילת טיקטוק ל-{chat_id} נכשלה: {e}")
