@@ -622,6 +622,56 @@ def ali_search_products(keyword: str, page: int, tracking_id: str) -> List[Dict]
     return []
 
 
+LINK_GENERATE_METHOD = "aliexpress.affiliate.link.generate"
+
+
+def affiliate_short_link(product_id: str, tracking_id: str) -> Optional[str]:
+    """
+    יוצר קישור שותפים קצר בפורמט של הפורטל (s.click.aliexpress.com/e/...)
+    דרך link.generate, עם ה-Tracking ID. מחזיר None אם נכשל או שאין הרשאה.
+    """
+    if not product_id or not tracking_id or LINK_GENERATE_METHOD in no_permission_methods:
+        return None
+    params: Dict[str, str] = {
+        "app_key": ALI_APP_KEY,
+        "method": LINK_GENERATE_METHOD,
+        "sign_method": "sha256",
+        "timestamp": str(int(time.time() * 1000)),
+        "promotion_link_type": "0",
+        "source_values": f"https://www.aliexpress.com/item/{product_id}.html",
+        "tracking_id": tracking_id,
+    }
+    params["sign"] = ali_sign(params, ALI_APP_SECRET)
+    try:
+        res = requests.post("https://api-sg.aliexpress.com/sync", data=params, timeout=15)
+        res.raise_for_status()
+        data = res.json()
+        if "error_response" in data:
+            error = data["error_response"]
+            if error.get("code") == "InsufficientPermission":
+                logger.warning("אין הרשאה ל-link.generate - ממשיך עם הקישור מהחיפוש")
+                no_permission_methods.add(LINK_GENERATE_METHOD)
+            else:
+                logger.error(f"link.generate error: {error}")
+            return None
+        links = (
+            data.get("aliexpress_affiliate_link_generate_response", {})
+                .get("resp_result", {})
+                .get("result", {})
+                .get("promotion_links", {})
+        )
+        if isinstance(links, dict):
+            links = links.get("promotion_link")
+        if isinstance(links, list) and links and links[0].get("promotion_link"):
+            link = links[0]["promotion_link"]
+            logger.info(f"קישור שותפים ({tracking_id}): {link}")
+            return link
+        logger.warning(f"link.generate: אין קישור בתשובה: {data}")
+    except Exception as e:
+        logger.error(f"link.generate נכשל: {e}")
+    return None
+
+
 def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
     """מוצא מוצר טוב שעוד לא פורסם ומחזיר אותו בפורמט של build_caption."""
     posted = set(load_posted())
@@ -676,7 +726,8 @@ def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
             "original_price": p.get("target_original_price"),
             "discount": p.get("discount"),
             "orders": p.get("lastest_volume"),
-            "link": p.get("promotion_link"),
+            "link": affiliate_short_link(str(p.get("product_id")), tracking_id)
+                    or p.get("promotion_link"),
             "tracking_id": tracking_id,
         }
     return None
