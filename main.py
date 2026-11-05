@@ -135,6 +135,19 @@ TIKTOK_CHAT_IDS = {
 # סרטון אנכי שהבוט מייצר מתמונות המוצר (בתוך חבילת הטיקטוק)
 TIKTOK_VIDEO = os.getenv("TIKTOK_VIDEO", "true").lower() in ("1", "true", "yes", "on")
 
+# --- צמיחת הערוץ ---
+# כפתורים מתחת לכל פוסט: "לרכישה" ו"שתפו את הערוץ"
+POST_BUTTONS = os.getenv("POST_BUTTONS", "true").lower() in ("1", "true", "yes", "on")
+# פוסט שבועי של הדילים הכי שווים. פורמט: "יום שעה" באנגלית, למשל "fri 12:00". off = כבוי
+WEEKLY_POST  = os.getenv("WEEKLY_POST", "fri 12:00").strip().lower()
+HISTORY_FILE = os.getenv("HISTORY_FILE", "history.json")       # דילים שפורסמו (לפוסט השבועי)
+# קישורי הצטרפות נפרדים לכל מקור, כדי לדעת מאיפה מגיעים המנויים
+INVITE_SOURCES = [
+    x.strip() for x in os.getenv("INVITE_SOURCES", "TikTok,Instagram,Facebook,WhatsApp").split(",")
+    if x.strip()
+]
+LINKS_FILE = os.getenv("LINKS_FILE", "invite_links.json")
+
 waiting_for_affiliate = {}
 queue_lock = Lock()
 
@@ -463,11 +476,35 @@ def enqueue_post(image: Optional[str], caption: str, data: Optional[Dict] = None
         return len(queue)
 
 
+def public_channel_url() -> Optional[str]:
+    name = (CHANNEL_USERNAME or "").lstrip("@")
+    return f"https://t.me/{name}" if name and not name.lstrip("-").isdigit() else None
+
+
+def post_keyboard(post: Dict) -> Optional[types.InlineKeyboardMarkup]:
+    """כפתור לרכישה + כפתור לשיתוף הערוץ."""
+    if not POST_BUTTONS:
+        return None
+    keyboard = types.InlineKeyboardMarkup()
+    link = (post.get("data") or {}).get("link")
+    if link and str(link).startswith("http"):
+        keyboard.add(types.InlineKeyboardButton("🛒 לרכישה", url=link))
+    channel = public_channel_url()
+    if channel:
+        share = "https://t.me/share/url?" + urllib.parse.urlencode(
+            {"url": channel, "text": "🔥 ערוץ דילים מאלי אקספרס - שווה להצטרף!"}
+        )
+        keyboard.add(types.InlineKeyboardButton("📢 שתפו את הערוץ עם חברים", url=share))
+    return keyboard if keyboard.keyboard else None
+
+
 def send_post(chat_id, post: Dict[str, Optional[str]]) -> None:
+    markup = post_keyboard(post)
     if post.get("image"):
-        bot.send_photo(chat_id, post["image"], caption=post["caption"], parse_mode="HTML")
+        bot.send_photo(chat_id, post["image"], caption=post["caption"], parse_mode="HTML",
+                       reply_markup=markup)
     else:
-        bot.send_message(chat_id, post["caption"], parse_mode="HTML")
+        bot.send_message(chat_id, post["caption"], parse_mode="HTML", reply_markup=markup)
 
 
 def publish_next() -> bool:
@@ -483,6 +520,7 @@ def publish_next() -> bool:
         save_queue(queue)
     logger.info(f"פוסט פורסם לערוץ {CHANNEL_USERNAME}. נשארו בתור: {len(queue)}")
     if post.get("data"):
+        record_history(post["data"])
         send_tiktok_pack(post["data"])
     return True
 
@@ -651,8 +689,9 @@ def publish_auto_product() -> bool:
 
     description = generate_description(data) or data.get("title") or "מוצר מומלץ!"
     caption = build_caption(data, description)
-    send_post(CHANNEL_USERNAME, {"image": data.get("image"), "caption": caption})
+    send_post(CHANNEL_USERNAME, {"image": data.get("image"), "caption": caption, "data": data})
     mark_posted(data["product_id"])
+    record_history(data)
     logger.info(f"מוצר אוטומטי פורסם: {data['product_id']} ({data['tracking_id']})")
     send_tiktok_pack(data)
     return True
@@ -767,10 +806,135 @@ def publish_scheduled() -> None:
         publish_auto_product()
 
 
+# --- היסטוריה ופוסט שבועי ---
+def load_json_file(path: str, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+    except Exception as e:
+        logger.error(f"שגיאה בקריאת {path}: {e}")
+        return default
+
+
+def save_json_file(path: str, value) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(value, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def record_history(data: Dict) -> None:
+    try:
+        price, original, saving, percent = price_info(data)
+        history = load_json_file(HISTORY_FILE, [])
+        history.append({
+            "ts": time.time(),
+            "title": data.get("title"),
+            "price": price,
+            "percent": percent or 0,
+            "orders": data.get("orders"),
+            "link": data.get("link"),
+        })
+        save_json_file(HISTORY_FILE, history[-300:])
+    except Exception as e:
+        logger.error(f"שמירת היסטוריה נכשלה: {e}")
+
+
+def short_hebrew_names(titles: List[str]) -> List[str]:
+    """שמות קצרים בעברית למוצרים (2-4 מילים). אם OpenAI לא זמין - קיצור של השם המקורי."""
+    fallback = [(t or "מוצר")[:45].rstrip() + ("…" if len(t or "") > 45 else "") for t in titles]
+    try:
+        prompt = (
+            "תן שם קצר וברור בעברית (2-4 מילים) לכל אחד מהמוצרים הבאים. "
+            "החזר JSON בלבד: מערך של מחרוזות באותו סדר.\n"
+            + "\n".join(f"{i + 1}. {t}" for i, t in enumerate(titles))
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=300,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        names = json.loads(text[text.index("["): text.rindex("]") + 1])
+        if isinstance(names, list) and len(names) == len(titles):
+            return [str(n).strip() or fb for n, fb in zip(names, fallback)]
+    except Exception as e:
+        logger.warning(f"שמות קצרים: משתמש בשמות המקוריים ({e})")
+    return fallback
+
+
+def publish_weekly() -> bool:
+    """מפרסם לערוץ את 5 הדילים עם ההנחה הגבוהה ביותר מ-7 הימים האחרונים."""
+    week_ago = time.time() - 7 * 24 * 3600
+    deals = [d for d in load_json_file(HISTORY_FILE, []) if d.get("ts", 0) >= week_ago and d.get("link")]
+    if not deals:
+        logger.info("פוסט שבועי: אין דילים מהשבוע האחרון")
+        return False
+
+    def orders(d):
+        try:
+            return int(float(d.get("orders") or 0))
+        except ValueError:
+            return 0
+
+    top = sorted(deals, key=lambda d: (d.get("percent") or 0, orders(d)), reverse=True)[:5]
+    names = short_hebrew_names([d.get("title") or "" for d in top])
+    medals = ["🥇", "🥈", "🥉", "🔥", "🔥"]
+    lines = ["🏆 <b>הדילים הכי שווים של השבוע</b>", ""]
+    for medal, name, d in zip(medals, names, top):
+        price = f" - {d['price']:.2f} ₪" if d.get("price") else ""
+        discount = f" ({d['percent']}% הנחה)" if d.get("percent") else ""
+        url = html.escape(str(d["link"]), quote=True)
+        lines.append(f'{medal} <a href="{url}">{html.escape(name)}</a>{price}{discount}')
+    lines += ["", "👇 עוד דילים כל יום כאן בערוץ - שתפו עם חברים!"]
+
+    markup = post_keyboard({})
+    bot.send_message(CHANNEL_USERNAME, "\n".join(lines), parse_mode="HTML",
+                     disable_web_page_preview=True, reply_markup=markup)
+    logger.info(f"פוסט שבועי פורסם ({len(top)} דילים)")
+    return True
+
+
+WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def weekly_schedule() -> Optional[tuple]:
+    """("fri 12:00") -> (4, "12:00"). None אם כבוי או לא תקין."""
+    parts = WEEKLY_POST.split()
+    if len(parts) == 2 and parts[0][:3] in WEEKDAYS and re.fullmatch(r"\d{1,2}:\d{2}", parts[1]):
+        hh, mm = parts[1].split(":")
+        return WEEKDAYS[parts[0][:3]], f"{int(hh):02d}:{mm}"
+    if WEEKLY_POST not in ("off", "false", "0", "no", ""):
+        logger.warning(f"WEEKLY_POST לא תקין: {WEEKLY_POST!r} (דוגמה: 'fri 12:00')")
+    return None
+
+
+# --- קישורי הצטרפות לפי מקור ---
+def get_invite_links() -> Dict[str, str]:
+    """יוצר (פעם אחת) קישור הצטרפות נפרד לכל מקור ושומר אותו."""
+    links = load_json_file(LINKS_FILE, {})
+    changed = False
+    for source in INVITE_SOURCES:
+        if source not in links:
+            link = bot.create_chat_invite_link(CHANNEL_USERNAME, name=source[:32])
+            links[source] = link.invite_link
+            changed = True
+    if changed:
+        save_json_file(LINKS_FILE, links)
+    return links
+
+
 def scheduler_loop() -> None:
     """בודק כל 20 שניות אם הגיעה אחת משעות הפרסום."""
     last_slot = None
+    last_weekly = None
+    weekly = weekly_schedule()
     logger.info(f"Scheduler פעיל. שעות פרסום: {', '.join(POST_TIMES)} ({TIMEZONE})")
+    if weekly:
+        logger.info(f"פוסט שבועי: יום {weekly[0]} (0=שני) בשעה {weekly[1]}")
     while True:
         try:
             now = datetime.now(TIMEZONE)
@@ -779,6 +943,9 @@ def scheduler_loop() -> None:
             if hhmm in POST_TIMES and slot != last_slot:
                 last_slot = slot
                 publish_scheduled()
+            if weekly and now.weekday() == weekly[0] and hhmm == weekly[1] and slot != last_weekly:
+                last_weekly = slot
+                publish_weekly()
         except Exception as e:
             logger.error(f"שגיאה בפרסום מתוזמן: {e}", exc_info=True)
         time.sleep(20)
@@ -871,7 +1038,10 @@ def start_cmd(message: types.Message):
         "/queue - כמה פוסטים בתור\n"
         "/postnow - לפרסם עכשיו את הפוסט הבא\n"
         "/clearqueue - לרוקן את התור\n"
-        "/autopost - למצוא מוצר לבד ולפרסם אותו עכשיו\n\n"
+        "/autopost - למצוא מוצר לבד ולפרסם אותו עכשיו\n"
+        "/weekly - לפרסם עכשיו את הדילים הכי שווים של השבוע\n"
+        "/links - קישורי הצטרפות נפרדים לכל מקור (TikTok, אינסטגרם...)\n"
+        "/myid - המזהה שלך בטלגרם\n\n"
         "🎵 אחרי כל פרסום בערוץ תקבל כאן חבילת טיקטוק: תמונות + תסריט וכיתוב מוכנים.",
     )
 
@@ -901,6 +1071,51 @@ def queue_cmd(message: types.Message):
         message,
         f"📋 בתור: {count} פוסטים\n⏰ שעות פרסום: {', '.join(POST_TIMES)}",
     )
+
+
+@bot.message_handler(commands=["weekly"])
+def weekly_cmd(message: types.Message):
+    if not is_admin(message):
+        return
+    if not CHANNEL_USERNAME:
+        bot.reply_to(message, "❌ לא הוגדר CHANNEL_USERNAME")
+        return
+    try:
+        if publish_weekly():
+            bot.reply_to(message, "✅ הפוסט השבועי פורסם לערוץ")
+        else:
+            bot.reply_to(message, "אין עדיין דילים מהשבוע האחרון")
+    except Exception as e:
+        logger.error(f"weekly error: {e}", exc_info=True)
+        bot.reply_to(message, f"❌ הפרסום נכשל: {e}")
+
+
+@bot.message_handler(commands=["links"])
+def links_cmd(message: types.Message):
+    if not is_admin(message):
+        return
+    if not CHANNEL_USERNAME:
+        bot.reply_to(message, "❌ לא הוגדר CHANNEL_USERNAME")
+        return
+    try:
+        links = get_invite_links()
+    except Exception as e:
+        logger.error(f"links error: {e}", exc_info=True)
+        bot.reply_to(
+            message,
+            "❌ לא הצלחתי ליצור קישורים. ודא שלבוט יש בערוץ הרשאת ניהול "
+            f"'הוספת מנויים / Invite users via link'.\n\n{e}",
+            parse_mode=None,
+        )
+        return
+    lines = ["🔗 קישורי הצטרפות לפי מקור:", ""]
+    for source, url in links.items():
+        lines.append(f"<b>{html.escape(source)}</b>\n{url}\n")
+    lines.append(
+        "שים כל קישור רק במקום שלו (למשל קישור TikTok בביו של הטיקטוק).\n"
+        "📊 כמה הצטרפו מכל קישור: בערוץ ← ניהול הערוץ ← Invite Links."
+    )
+    bot.reply_to(message, "\n".join(lines), disable_web_page_preview=True)
 
 
 @bot.message_handler(commands=["postnow"])
