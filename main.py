@@ -268,6 +268,7 @@ def ali_productdetail(product_id: str) -> Optional[Dict[str, Optional[str]]]:
         "rating": p.get("evaluate_rate"),
         "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
         "original_price": p.get("target_original_price"),
+        "discount": p.get("discount"),
         "orders": p.get("lastest_volume") or p.get("sale_count"),
     
     }
@@ -289,12 +290,24 @@ def pull_product(url: str):
 # --- יצירת תיאור שיווקי ---
 def generate_description(data: Dict[str, Optional[str]]) -> Optional[str]:
     try:
+        price, original, saving, percent = price_info(data)
+        if original:
+            deal = (
+                f"מחיר רגיל: {original:.2f} ₪\n"
+                f"מחיר עכשיו: {price:.2f} ₪\n"
+                f"חיסכון: {saving:.2f} ₪ ({percent}% הנחה)\n"
+            )
+        else:
+            deal = f"מחיר: {data.get('price')} ₪\n"
         prompt = (
-            "כתוב תיאור שיווקי קצר (עד 3 משפטים), קולח ומושך בעברית למוצר הבא, "
-            "עם אימוג'ים וקריאה לפעולה:\n"
-            f"שם: {data.get('title')}\n"
-            f"מחיר: {data.get('price')} ₪\n"
-            f"דירוג: {data.get('rating')}\n"
+            "כתוב תיאור שיווקי קצר (2-3 משפטים), קולח ומושך בעברית למוצר הבא, "
+            "עם אימוג'ים. הדגש מה המוצר עושה ולמה הוא שווה"
+            + (" ואת ההנחה והחיסכון" if original else "")
+            + ". אל תכתוב את המחירים עצמם ואל תוסיף קישור - הם מופיעים בהמשך הפוסט. "
+            "תכתוב רק את התיאור, בלי כותרת.\n"
+            f"שם המוצר: {data.get('title')}\n"
+            + deal
+            + f"דירוג: {data.get('rating')}\n"
             f"כמות הזמנות: {data.get('orders')}"
         )
         response = client.chat.completions.create(
@@ -303,7 +316,9 @@ def generate_description(data: Dict[str, Optional[str]]) -> Optional[str]:
             temperature=0.7,
             max_tokens=200,  # קצר כדי לא לחרוג ממגבלת caption
         )
-        return response.choices[0].message.content.strip()
+        text = (response.choices[0].message.content or "").strip()
+        logger.info(f"תיאור מ-OpenAI ({len(text)} תווים): {text[:80]!r}")
+        return text or None
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
         return None
@@ -316,19 +331,35 @@ def to_float(value) -> Optional[float]:
         return None
 
 
-def format_price(data: Dict[str, Optional[str]]) -> str:
-    """מחיר אחרי הנחה, ואם יש הנחה - גם המחיר המקורי מחוק ואחוז ההנחה."""
+def price_info(data: Dict[str, Optional[str]]):
+    """מחזיר (מחיר נוכחי, מחיר רגיל, חיסכון, אחוז הנחה). ערכים חסרים = None."""
     price = to_float(data.get("price"))
     original = to_float(data.get("original_price"))
     if price is None:
-        return f"{data.get('price')} ₪"
-    text = f"{price:.2f} ₪"
-    if original and original > price:
-        discount = round((1 - price / original) * 100)
-        text += f" במקום <s>{original:.2f} ₪</s>"
-        if discount >= 1:
-            text += f" ({discount}% הנחה)"
-    return text
+        return None, None, None, None
+    if not original:
+        # אם אין מחיר מקורי אבל יש אחוז הנחה - מחשבים ממנו
+        discount = parse_percent(data.get("discount"))
+        if 0 < discount < 100:
+            original = price / (1 - discount / 100)
+    if original and original > price * 1.01:
+        saving = original - price
+        return price, original, saving, round(saving / original * 100)
+    return price, None, None, None
+
+
+def format_price(data: Dict[str, Optional[str]]) -> str:
+    """שורות מחיר בנוסח שיווקי: מחיר רגיל, מחיר עכשיו, כמה חוסכים."""
+    price, original, saving, percent = price_info(data)
+    if price is None:
+        return f"💰 מחיר: {data.get('price')} ₪"
+    if original is None:
+        return f"🔥 מחיר: {price:.2f} ₪ בלבד!"
+    return (
+        f"❌ מחיר רגיל: <s>{original:.2f} ₪</s>\n"
+        f"🔥 מחיר עכשיו: <b>{price:.2f} ₪</b>\n"
+        f"🤑 חוסכים {saving:.2f} ₪ ({percent}% הנחה)!"
+    )
 
 
 def visible_len(html_text: str) -> int:
@@ -340,13 +371,14 @@ def build_caption(data: Dict[str, Optional[str]], description: str) -> str:
     """בונה caption ומוודא שהטקסט הנראה לא עולה על 1024 תווים."""
     footer = (
         f"\n\n"
-        f"💰 מחיר: {format_price(data)}\n"
+        f"{format_price(data)}\n"
         f"⭐ דירוג: {data.get('rating')}\n"
         f"🛒 הזמנות: {data.get('orders')}\n"
         f"🔗 <a href=\"{html.escape(str(data.get('link')), quote=True)}\">לרכישה כאן</a>"
     )
     header = f"<b>{HEADLINE}</b>\n\n"
     max_desc_len = CAPTION_LIMIT - visible_len(header) - visible_len(footer) - 10  # buffer
+    description = (description or "").strip() or (data.get("title") or "")
     if len(description) > max_desc_len:
         description = description[:max(max_desc_len, 0)].rstrip() + "..."
     return header + html.escape(description, quote=False) + footer
@@ -542,6 +574,7 @@ def find_auto_product() -> Optional[Dict[str, Optional[str]]]:
             "rating": p.get("evaluate_rate"),
             "price": p.get("target_app_sale_price") or p.get("target_sale_price"),
             "original_price": p.get("target_original_price"),
+            "discount": p.get("discount"),
             "orders": p.get("lastest_volume"),
             "link": p.get("promotion_link"),
             "tracking_id": tracking_id,
