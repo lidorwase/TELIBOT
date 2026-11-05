@@ -132,6 +132,8 @@ TIKTOK_PACK = os.getenv("TIKTOK_PACK", "true").lower() in ("1", "true", "yes", "
 TIKTOK_CHAT_IDS = {
     int(x) for x in os.getenv("TIKTOK_CHAT_ID", "").replace(" ", "").split(",") if x
 } or ADMIN_IDS
+# סרטון אנכי שהבוט מייצר מתמונות המוצר (בתוך חבילת הטיקטוק)
+TIKTOK_VIDEO = os.getenv("TIKTOK_VIDEO", "true").lower() in ("1", "true", "yes", "on")
 
 waiting_for_affiliate = {}
 queue_lock = Lock()
@@ -708,8 +710,15 @@ def send_tiktok_pack(data: Dict) -> None:
     if not TIKTOK_CHAT_IDS:
         logger.warning("חבילת טיקטוק: לא הוגדרו ADMIN_IDS או TIKTOK_CHAT_ID - לא יודע למי לשלוח")
         return
+    video_path = None
     try:
         script = generate_tiktok_script(data)
+        if TIKTOK_VIDEO:
+            try:
+                from video import make_tiktok_video
+                video_path = make_tiktok_video(data, price_info)
+            except Exception as e:
+                logger.error(f"יצירת סרטון טיקטוק נכשלה: {e}", exc_info=True)
         images = (data.get("images") or [data.get("image")])[:10]
         images = [u for u in images if u]
         title = (data.get("title") or "")[:200]
@@ -717,6 +726,12 @@ def send_tiktok_pack(data: Dict) -> None:
         for chat_id in TIKTOK_CHAT_IDS:
             try:
                 bot.send_message(chat_id, f"🎵 חבילת טיקטוק למוצר שפורסם עכשיו:\n{title}", parse_mode=None)
+                if video_path:
+                    with open(video_path, "rb") as f:
+                        bot.send_video(
+                            chat_id, f, supports_streaming=True, width=720, height=1280,
+                            caption="🎬 סרטון מוכן לטיקטוק - שמור לגלריה, העלה והוסף סאונד טרנדי באפליקציה",
+                        )
                 if data.get("video"):
                     try:
                         bot.send_video(chat_id, data["video"], caption="🎬 סרטון המוצר")
@@ -736,6 +751,12 @@ def send_tiktok_pack(data: Dict) -> None:
                 logger.error(f"שליחת חבילת טיקטוק ל-{chat_id} נכשלה: {e}")
     except Exception as e:
         logger.error(f"חבילת טיקטוק נכשלה: {e}", exc_info=True)
+    finally:
+        if video_path:
+            try:
+                os.remove(video_path)
+            except OSError:
+                pass
 
 
 def publish_scheduled() -> None:
