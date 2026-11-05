@@ -1085,6 +1085,7 @@ def is_admin(message: Message) -> bool:
     func=lambda m: (
         isinstance(m.text, str)
         and "http" in m.text.lower()
+        and not m.text.startswith("/")
         and m.chat.id not in waiting_for_affiliate
     )
 )
@@ -1166,9 +1167,59 @@ def start_cmd(message: types.Message):
         "/autopost - למצוא מוצר לבד ולפרסם אותו עכשיו\n"
         "/weekly - לפרסם עכשיו את הדילים הכי שווים של השבוע\n"
         "/links - קישורי הצטרפות נפרדים לכל מקור (TikTok, אינסטגרם...)\n"
-        "/myid - המזהה שלך בטלגרם\n\n"
+        "/myid - המזהה שלך בטלגרם\n"
+        "/checklink <קישור> - לבדוק שקישור הוא קישור שותפים\n\n"
         "🎵 אחרי כל פרסום בערוץ תקבל כאן חבילת טיקטוק: תמונות + תסריט וכיתוב מוכנים.",
     )
+
+
+# --- /checklink ---
+AFFILIATE_PARAMS = ("aff_fcid", "aff_fsk", "aff_platform", "aff_trace_key", "aff_short_key", "sk", "terminal_id")
+
+
+def check_affiliate_link(url: str) -> Dict:
+    """עוקב אחרי ההפניות של הקישור ומחפש בכתובות את פרמטרי השותפים של AliExpress."""
+    chain, found = [], {}
+    res = requests.get(
+        url, timeout=15, allow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"},
+    )
+    for r in list(res.history) + [res]:
+        chain.append(r.url)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(r.url).query)
+        for key in AFFILIATE_PARAMS:
+            if key in query and key not in found:
+                found[key] = query[key][0]
+    product_id = extract_pid(res.url)
+    return {"final_url": res.url, "chain": chain, "params": found, "product_id": product_id}
+
+
+@bot.message_handler(commands=["checklink"])
+def checklink_cmd(message: types.Message):
+    if not is_admin(message):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or "http" not in parts[1]:
+        bot.reply_to(message, "שלח כך: /checklink ואחריו הקישור\n(הבדיקה עשויה להיספר כקליק אחד בדוח)", parse_mode=None)
+        return
+    bot.send_chat_action(message.chat.id, "typing")
+    try:
+        result = check_affiliate_link(parts[1].strip())
+    except Exception as e:
+        bot.reply_to(message, f"❌ לא הצלחתי לפתוח את הקישור: {e}", parse_mode=None)
+        return
+    params = result["params"]
+    if any(k.startswith("aff_") for k in params):
+        verdict = "✅ זה קישור שותפים - נמצאו פרמטרי שותפים של AliExpress"
+    else:
+        verdict = "⚠️ לא נמצאו פרמטרי שותפים בכתובת. ייתכן שזה לא קישור שותפים"
+    lines = [verdict, ""]
+    for key, value in params.items():
+        lines.append(f"• {key} = {value[:60]}")
+    if result["product_id"]:
+        lines.append(f"\n🛍 מוצר: {result['product_id']}")
+    lines.append(f"🔀 מספר הפניות: {len(result['chain']) - 1}")
+    bot.reply_to(message, "\n".join(lines), parse_mode=None, disable_web_page_preview=True)
 
 
 # --- /myid ---
